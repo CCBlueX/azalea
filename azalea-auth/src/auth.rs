@@ -296,7 +296,7 @@ pub async fn get_ms_link_code(
     Ok(client
         .post("https://login.live.com/oauth20_connect.srf")
         .form(&vec![
-            ("scope", "service::user.auth.xboxlive.com::MBI_SSL"),
+            ("scope", "XboxLive.signin offline_access"),
             ("client_id", CLIENT_ID),
             ("response_type", "device_code"),
         ])
@@ -382,7 +382,7 @@ pub async fn refresh_ms_auth_token(
     let access_token_response_text = client
         .post("https://login.live.com/oauth20_token.srf")
         .form(&vec![
-            ("scope", "service::user.auth.xboxlive.com::MBI_SSL"),
+            ("scope", "XboxLive.signin offline_access"),
             ("client_id", CLIENT_ID),
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
