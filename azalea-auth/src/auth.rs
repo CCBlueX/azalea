@@ -256,8 +256,8 @@ pub struct ProfileResponse {
     pub capes: Vec<serde_json::Value>,
 }
 
-// nintendo switch (so it works for accounts that are under 18 years old)
-const CLIENT_ID: &str = "00000000441cc96b";
+// liquidboune client id
+const CLIENT_ID: &str = "0add8caf-2cc6-4546-b798-c3d171217dd9";
 
 #[derive(Debug, Error)]
 pub enum GetMicrosoftAuthTokenError {
@@ -423,7 +423,7 @@ async fn auth_with_xbox_live(
             "SiteName": "user.auth.xboxlive.com",
             // this value should have "d=" prepended if you're using your own app (as opposed to
             // the default nintendo switch one)
-            "RpsTicket": access_token
+            "RpsTicket": format!("d={}", access_token)
         },
         "RelyingParty": "http://auth.xboxlive.com",
         "TokenType": "JWT"
