@@ -217,6 +217,26 @@ pub struct XboxLiveAuthResponse {
     pub display_claims: HashMap<String, Vec<HashMap<String, String>>>,
 }
 
+#[allow(unused)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum XboxXstsResponse {
+    #[serde(rename_all = "PascalCase")]
+    Error {
+        identity: String,
+        x_err: i64,
+        message: String,
+        redirect: String,
+    },
+    #[serde(rename_all = "PascalCase")]
+    Success {
+        issue_instant: String,
+        not_after: String,
+        token: String,
+        display_claims: HashMap<String, Vec<HashMap<String, String>>>,
+    }
+}
+
 /// Just the important data
 #[derive(Serialize, Deserialize, Debug)]
 pub struct XboxLiveAuth {
@@ -463,6 +483,29 @@ async fn auth_with_xbox_live(
 pub enum MinecraftXstsAuthError {
     #[error("Http error: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("The account doesn't have an Xbox account. Once they sign up for one (or login through minecraft.net to create one) then they can proceed with the login. This shouldn't happen with accounts that have purchased Minecraft with a Microsoft account, as they would've already gone through that Xbox signup process.")]
+    NoXboxAccount,
+    #[error("The account is from a country where Xbox Live is not available/banned")]
+    CountryBanned,
+    #[error("The account needs adult verification on the Xbox page")]
+    AdultVerificationRequired,
+    #[error("The account is a child account and needs to be added to a family by an adult")]
+    ChildAccount,
+    #[error("Unknown Xbox Live error code: {0}")]
+    Unknown(i64),
+}
+
+impl MinecraftXstsAuthError {
+    pub fn from_xerr_code(code: i64) -> MinecraftXstsAuthError {
+        match code {
+            2148916233 => MinecraftXstsAuthError::NoXboxAccount,
+            2148916235 => MinecraftXstsAuthError::CountryBanned,
+            2148916236 => MinecraftXstsAuthError::AdultVerificationRequired,
+            2148916237 => MinecraftXstsAuthError::AdultVerificationRequired,
+            2148916238 => MinecraftXstsAuthError::ChildAccount,
+            _ => MinecraftXstsAuthError::Unknown(code),
+        }
+    }
 }
 
 async fn obtain_xsts_for_minecraft(
@@ -482,11 +525,17 @@ async fn obtain_xsts_for_minecraft(
         }))
         .send()
         .await?
-        .json::<XboxLiveAuthResponse>()
+        .json::<XboxXstsResponse>()
         .await?;
     tracing::trace!("Xbox Live auth response (for XSTS): {:?}", res);
 
-    Ok(res.token)
+    match res {
+        XboxXstsResponse::Error { x_err, .. } => {
+            tracing::error!("Xbox Live auth error: {}", x_err);
+            Err(MinecraftXstsAuthError::from_xerr_code(x_err))
+        },
+        XboxXstsResponse::Success { token, .. } => Ok(token),
+    }
 }
 
 #[derive(Debug, Error)]
