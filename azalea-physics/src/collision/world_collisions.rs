@@ -15,7 +15,10 @@ pub fn get_block_collisions(world: &Instance, aabb: AABB) -> Vec<VoxelShape> {
     let mut block_collisions = Vec::new();
 
     let initial_chunk_pos = ChunkPos::from(state.cursor.origin());
-    let initial_chunk = world.chunks.get(&initial_chunk_pos).unwrap();
+    let initial_chunk = match world.chunks.get(&initial_chunk_pos) {
+        Some(chunk) => chunk,
+        None => return block_collisions,
+    };
     let initial_chunk = initial_chunk.read();
 
     while let Some(item) = state.cursor.next() {
