@@ -112,7 +112,6 @@ pub enum BrigadierParser {
     ItemPredicate,
     Color,
     FormattedText,
-    Style,
     Message,
     NbtCompoundTag,
     NbtTag,

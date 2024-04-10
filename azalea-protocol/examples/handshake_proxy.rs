@@ -40,7 +40,7 @@ static PROXY_FAVICON: Lazy<Option<String>> = Lazy::new(|| None);
 
 static PROXY_VERSION: Lazy<Version> = Lazy::new(|| Version {
     name: "1.19.3".to_string(),
-    protocol: PROTOCOL_VERSION,
+    protocol: PROTOCOL_VERSION as i32,
 });
 
 const PROXY_PLAYERS: Players = Players {
@@ -187,7 +187,7 @@ async fn transfer(
     outbound.set_nodelay(true)?;
 
     // Repeat the intent and hello packet
-    // received earlier to the proxy target
+    // recieved earlier to the proxy target
     let mut outbound_conn: Connection<ClientboundHandshakePacket, ServerboundHandshakePacket> =
         Connection::wrap(outbound);
     outbound_conn.write(intent.get()).await?;

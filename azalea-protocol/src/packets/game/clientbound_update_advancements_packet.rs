@@ -44,10 +44,10 @@ impl azalea_buf::McBufWritable for DisplayInfo {
 
         let mut data: u32 = 0;
         if self.background.is_some() {
-            data |= 0b001;
+            data |= 0b1;
         }
         if self.show_toast {
-            data |= 0b010;
+            data |= 0b10;
         }
         if self.hidden {
             data |= 0b100;
@@ -119,6 +119,8 @@ pub struct AdvancementHolder {
 mod tests {
     use super::*;
     use azalea_buf::{McBufReadable, McBufWritable};
+    use azalea_core::resource_location::ResourceLocation;
+    use std::io::Cursor;
 
     #[test]
     fn test() {

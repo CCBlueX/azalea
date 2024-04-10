@@ -1318,25 +1318,6 @@ pub fn process_packet_events(ecs: &mut World) {
             }
             ClientboundGamePacket::PlayerLookAt(_) => {}
             ClientboundGamePacket::RemoveMobEffect(_) => {}
-            ClientboundGamePacket::ResourcePackPush(p) => {
-                debug!("Got resource pack packet {p:?}");
-
-                let mut system_state: SystemState<EventWriter<ResourcePackEvent>> =
-                    SystemState::new(ecs);
-                let mut resource_pack_events = system_state.get_mut(ecs);
-
-                resource_pack_events.send(ResourcePackEvent {
-                    entity: player_entity,
-                    id: p.id,
-                    url: p.url.to_owned(),
-                    hash: p.hash.to_owned(),
-                    required: p.required,
-                    prompt: p.prompt.to_owned(),
-                });
-
-                system_state.apply(ecs);
-            }
-            ClientboundGamePacket::ResourcePackPop(_) => {}
             ClientboundGamePacket::Respawn(p) => {
                 debug!("Got respawn packet {p:?}");
 
@@ -1470,11 +1451,8 @@ pub fn process_packet_events(ecs: &mut World) {
             ClientboundGamePacket::Bundle(_) => {}
             ClientboundGamePacket::DamageEvent(_) => {}
             ClientboundGamePacket::HurtAnimation(_) => {}
+            ClientboundGamePacket::ResourcePack(_) => {},
 
-            ClientboundGamePacket::TickingState(_) => {}
-            ClientboundGamePacket::TickingStep(_) => {}
-
-            ClientboundGamePacket::ResetScore(_) => {}
         }
     }
 }

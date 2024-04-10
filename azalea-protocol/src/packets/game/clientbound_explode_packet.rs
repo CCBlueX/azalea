@@ -1,14 +1,8 @@
-use std::{
-    io::{Cursor, Write},
-    str::FromStr,
-};
+use std::io::{Cursor, Write};
 
-use azalea_buf::{
-    BufReadError, McBuf, McBufReadable, McBufVarReadable, McBufVarWritable, McBufWritable,
-};
-use azalea_core::{position::BlockPos, resource_location::ResourceLocation};
+use azalea_buf::{BufReadError, McBufReadable, McBufVarReadable, McBufVarWritable, McBufWritable};
+use azalea_core::position::BlockPos;
 use azalea_protocol_macros::ClientboundGamePacket;
-use azalea_registry::{ParticleKind, SoundEvent};
 
 #[derive(Clone, Debug, PartialEq, ClientboundGamePacket)]
 pub struct ClientboundExplodePacket {
@@ -20,18 +14,6 @@ pub struct ClientboundExplodePacket {
     pub knockback_x: f32,
     pub knockback_y: f32,
     pub knockback_z: f32,
-    pub block_interaction: BlockInteraction,
-    pub small_explosion_particles: ParticleKind,
-    pub large_explosion_particles: ParticleKind,
-    pub explosion_sound: SoundEvent,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, McBuf)]
-pub enum BlockInteraction {
-    Keep,
-    Destroy,
-    DestroyWithDecay,
-    TriggerBlock,
 }
 
 impl McBufReadable for ClientboundExplodePacket {
@@ -59,18 +41,6 @@ impl McBufReadable for ClientboundExplodePacket {
         let knockback_y = f32::read_from(buf)?;
         let knockback_z = f32::read_from(buf)?;
 
-        let block_interaction = BlockInteraction::read_from(buf)?;
-        let small_explosion_particles = ParticleKind::read_from(buf)?;
-        let large_explosion_particles = ParticleKind::read_from(buf)?;
-
-        let sound_event_resource_location = ResourceLocation::read_from(buf)?.to_string();
-        let explosion_sound =
-            SoundEvent::from_str(&sound_event_resource_location).map_err(|_| {
-                BufReadError::UnexpectedStringEnumVariant {
-                    id: sound_event_resource_location,
-                }
-            })?;
-
         Ok(Self {
             x,
             y,
@@ -80,10 +50,6 @@ impl McBufReadable for ClientboundExplodePacket {
             knockback_x,
             knockback_y,
             knockback_z,
-            block_interaction,
-            small_explosion_particles,
-            large_explosion_particles,
-            explosion_sound,
         })
     }
 }
@@ -114,15 +80,6 @@ impl McBufWritable for ClientboundExplodePacket {
         self.knockback_x.write_into(buf)?;
         self.knockback_y.write_into(buf)?;
         self.knockback_z.write_into(buf)?;
-
-        self.block_interaction.write_into(buf)?;
-        self.small_explosion_particles.write_into(buf)?;
-        self.large_explosion_particles.write_into(buf)?;
-
-        let sound_event_resource_location =
-            ResourceLocation::new(&self.explosion_sound.to_string());
-        sound_event_resource_location.write_into(buf)?;
-
         Ok(())
     }
 }
@@ -153,10 +110,6 @@ mod tests {
             knockback_x: 1_000.0,
             knockback_y: 2_000.0,
             knockback_z: 3_000.0,
-            block_interaction: BlockInteraction::Destroy,
-            small_explosion_particles: ParticleKind::Explosion,
-            large_explosion_particles: ParticleKind::ExplosionEmitter,
-            explosion_sound: SoundEvent::EntityGenericExplode,
         };
         let mut buf = Vec::new();
         packet.write_into(&mut buf).unwrap();

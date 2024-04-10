@@ -34,7 +34,6 @@ fn accept_resource_pack(
         send_packet_events.send(SendPacketEvent {
             entity: event.entity,
             packet: ServerboundResourcePackPacket {
-                id: event.id,
                 action: serverbound_resource_pack_packet::Action::Accepted,
             }
             .get(),
@@ -42,7 +41,6 @@ fn accept_resource_pack(
         send_packet_events.send(SendPacketEvent {
             entity: event.entity,
             packet: ServerboundResourcePackPacket {
-                id: event.id,
                 action: serverbound_resource_pack_packet::Action::SuccessfullyLoaded,
             }
             .get(),

@@ -1,10 +1,8 @@
 use azalea_buf::McBuf;
 use azalea_protocol_macros::ServerboundGamePacket;
-use uuid::Uuid;
 
 #[derive(Clone, Debug, McBuf, ServerboundGamePacket)]
 pub struct ServerboundResourcePackPacket {
-    pub id: Uuid,
     pub action: Action,
 }
 
@@ -14,7 +12,4 @@ pub enum Action {
     Declined = 1,
     FailedDownload = 2,
     Accepted = 3,
-    InvalidUrl = 4,
-    FailedReload = 5,
-    Discarded = 6,
 }

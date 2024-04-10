@@ -9,6 +9,7 @@ use bytes::BytesMut;
 use flate2::read::ZlibDecoder;
 use futures::StreamExt;
 use futures_lite::future;
+use tracing::info;
 use std::backtrace::Backtrace;
 use std::{
     fmt::Debug,
