@@ -15,8 +15,8 @@ pub fn get_block_collisions(world: &Instance, aabb: AABB) -> Vec<VoxelShape> {
     let mut block_collisions = Vec::new();
 
     let initial_chunk_pos = ChunkPos::from(state.cursor.origin());
-    let initial_chunk = world.chunks.get(&initial_chunk_pos).unwrap();
-    let initial_chunk = initial_chunk.read();
+    let initial_chunk = world.chunks.get(&initial_chunk_pos);
+    let initial_chunk = initial_chunk.as_deref().map(RwLock::read);
 
     while let Some(item) = state.cursor.next() {
         if item.iteration_type == CursorIterationType::Corner {
@@ -25,9 +25,13 @@ pub fn get_block_collisions(world: &Instance, aabb: AABB) -> Vec<VoxelShape> {
 
         let item_chunk_pos = ChunkPos::from(item.pos);
         let block_state: BlockState = if item_chunk_pos == initial_chunk_pos {
-            initial_chunk
-                .get(&ChunkBlockPos::from(item.pos), state.world.chunks.min_y)
-                .unwrap_or(BlockState::AIR)
+            if let Some(initial_chunk) = &initial_chunk {
+                initial_chunk
+                    .get(&ChunkBlockPos::from(item.pos), state.world.chunks.min_y)
+                    .unwrap_or(BlockState::AIR)
+            } else {
+                BlockState::AIR
+            }
         } else {
             state.get_block_state(item.pos)
         };
@@ -81,7 +85,6 @@ pub struct BlockCollisionsState<'a> {
     pub aabb: AABB,
     pub entity_shape: VoxelShape,
     pub cursor: Cursor3d,
-    pub only_suffocating_blocks: bool,
 
     cached_sections: Vec<(ChunkSectionPos, azalea_world::Section)>,
     cached_block_shapes: Vec<(BlockState, &'static VoxelShape)>,
@@ -108,7 +111,6 @@ impl<'a> BlockCollisionsState<'a> {
             aabb,
             entity_shape: VoxelShape::from(aabb),
             cursor,
-            only_suffocating_blocks: false,
 
             cached_sections: Vec::new(),
             cached_block_shapes: Vec::new(),

@@ -20,7 +20,7 @@ use std::io::Cursor;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use thiserror::Error;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, BufStream};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf, ReuniteError};
 use tokio::net::TcpStream;
 use tracing::{error, info};
@@ -61,7 +61,7 @@ pub struct WriteConnection<W: ProtocolPacket> {
 ///     resolver,
 ///     connect::Connection,
 ///     packets::{
-///         ConnectionProtocol, PROTOCOL_VERSION,
+///         ClientIntention, PROTOCOL_VERSION,
 ///         login::{
 ///             ClientboundLoginPacket,
 ///             serverbound_hello_packet::ServerboundHelloPacket,
@@ -82,7 +82,7 @@ pub struct WriteConnection<W: ProtocolPacket> {
 ///             protocol_version: PROTOCOL_VERSION,
 ///             hostname: resolved_address.ip().to_string(),
 ///             port: resolved_address.port(),
-///             intention: ConnectionProtocol::Login,
+///             intention: ClientIntention::Login,
 ///         }
 ///         .get(),
 ///     )
@@ -104,12 +104,12 @@ pub struct WriteConnection<W: ProtocolPacket> {
 ///         let packet = conn.read().await?;
 ///         match packet {
 ///             ClientboundLoginPacket::Hello(p) => {
-///                 let e = azalea_crypto::encrypt(&p.public_key, &p.nonce).unwrap();
+///                 let e = azalea_crypto::encrypt(&p.public_key, &p.challenge).unwrap();
 ///
 ///                 conn.write(
 ///                     ServerboundKeyPacket {
 ///                         key_bytes: e.encrypted_public_key,
-///                         encrypted_challenge: e.encrypted_nonce,
+///                         encrypted_challenge: e.encrypted_challenge,
 ///                     }
 ///                     .get(),
 ///                 )
@@ -127,6 +127,7 @@ pub struct WriteConnection<W: ProtocolPacket> {
 ///                 return Err("login disconnect".into());
 ///             }
 ///             ClientboundLoginPacket::CustomQuery(p) => {}
+///             ClientboundLoginPacket::CookieRequest(_) => {}
 ///         }
 ///     };
 ///
@@ -257,6 +258,20 @@ pub enum ConnectionError {
     Io(#[from] std::io::Error),
 }
 
+use socks5_impl::protocol::UserKey;
+
+#[derive(Debug, Clone)]
+pub struct Proxy {
+    pub addr: SocketAddr,
+    pub auth: Option<UserKey>,
+}
+
+impl Proxy {
+    pub fn new(addr: SocketAddr, auth: Option<UserKey>) -> Self {
+        Self { addr, auth }
+    }
+}
+
 impl Connection<ClientboundHandshakePacket, ServerboundHandshakePacket> {
     /// Create a new connection to the given address.
     pub async fn new(address: &SocketAddr) -> Result<Self, ConnectionError> {
@@ -265,6 +280,28 @@ impl Connection<ClientboundHandshakePacket, ServerboundHandshakePacket> {
         // enable tcp_nodelay
         stream.set_nodelay(true)?;
 
+        Self::new_from_stream(stream).await
+    }
+
+    /// Create a new connection to the given address and Socks5 proxy. If you're
+    /// not using a proxy, use [`Self::new`] instead.
+    pub async fn new_with_proxy(
+        address: &SocketAddr,
+        proxy: Proxy,
+    ) -> Result<Self, ConnectionError> {
+        let proxy_stream = TcpStream::connect(proxy.addr).await?;
+        let mut stream = BufStream::new(proxy_stream);
+
+        let _ = socks5_impl::client::connect(&mut stream, address, proxy.auth)
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        Self::new_from_stream(stream.into_inner()).await
+    }
+
+    /// Create a new connection from an existing stream. Useful if you want to
+    /// set custom options on the stream. Otherwise, just use [`Self::new`].
+    pub async fn new_from_stream(stream: TcpStream) -> Result<Self, ConnectionError> {
         let (read_stream, write_stream) = stream.into_split();
 
         Ok(Connection {
@@ -368,7 +405,7 @@ impl Connection<ClientboundLoginPacket, ServerboundLoginPacket> {
     /// match conn.read().await? {
     ///     ClientboundLoginPacket::Hello(p) => {
     ///         // tell Mojang we're joining the server & enable encryption
-    ///         let e = azalea_crypto::encrypt(&p.public_key, &p.nonce).unwrap();
+    ///         let e = azalea_crypto::encrypt(&p.public_key, &p.challenge).unwrap();
     ///         conn.authenticate(
     ///             &access_token,
     ///             &profile.id,
@@ -378,7 +415,7 @@ impl Connection<ClientboundLoginPacket, ServerboundLoginPacket> {
     ///         conn.write(
     ///             ServerboundKeyPacket {
     ///                 key_bytes: e.encrypted_public_key,
-    ///                 encrypted_challenge: e.encrypted_nonce,
+    ///                 encrypted_challenge: e.encrypted_challenge,
     ///             }.get()
     ///         ).await?;
     ///         conn.set_encryption_key(e.secret_key);
