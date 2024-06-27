@@ -619,7 +619,7 @@ pub async fn get_profile(
         .map_err(|err| {
             match err.status() {
                 Some(reqwest::StatusCode::UNAUTHORIZED) => GetProfileError::TokenNotValid,
-                Some(reqwest::StatusCode::FORBIDDEN) => GetProfileError::NoMinecraftProfile,
+                Some(reqwest::StatusCode::NOT_FOUND) => GetProfileError::NoMinecraftProfile,
                 _ => GetProfileError::Http(err),
             }
         })?
