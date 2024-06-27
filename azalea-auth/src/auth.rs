@@ -598,6 +598,10 @@ pub async fn check_ownership(
 
 #[derive(Debug, Error)]
 pub enum GetProfileError {
+    #[error("The minecraft access token is not valid. It might be expired.")]
+    TokenNotValid,
+    #[error("The microsoft account doesn't have a Minecraft profile attached to it. Either the account doesn't own the game, or it has never logged in to 'minecraft.net' to create a profile.")]
+    NoMinecraftProfile,
     #[error("Http error: {0}")]
     Http(#[from] reqwest::Error),
 }
@@ -611,7 +615,14 @@ pub async fn get_profile(
         .header("Authorization", format!("Bearer {minecraft_access_token}"))
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status()
+        .map_err(|err| {
+            match err.status() {
+                Some(reqwest::StatusCode::UNAUTHORIZED) => GetProfileError::TokenNotValid,
+                Some(reqwest::StatusCode::FORBIDDEN) => GetProfileError::NoMinecraftProfile,
+                _ => GetProfileError::Http(err),
+            }
+        })?
         .json::<ProfileResponse>()
         .await?;
     tracing::trace!("{:?}", res);
