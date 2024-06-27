@@ -557,6 +557,7 @@ async fn auth_with_minecraft(
         }))
         .send()
         .await?
+        .error_for_status()?
         .json::<MinecraftAuthResponse>()
         .await?;
     tracing::trace!("{:?}", res);
@@ -584,6 +585,7 @@ pub async fn check_ownership(
         .header("Authorization", format!("Bearer {minecraft_access_token}"))
         .send()
         .await?
+        .error_for_status()?
         .json::<GameOwnershipResponse>()
         .await?;
     tracing::trace!("{:?}", res);
@@ -609,6 +611,7 @@ pub async fn get_profile(
         .header("Authorization", format!("Bearer {minecraft_access_token}"))
         .send()
         .await?
+        .error_for_status()?
         .json::<ProfileResponse>()
         .await?;
     tracing::trace!("{:?}", res);
