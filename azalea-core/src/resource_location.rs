@@ -1,15 +1,15 @@
 //! A resource, like minecraft:stone
 
-use azalea_buf::{BufReadError, McBufReadable, McBufWritable};
-use simdnbt::{owned::NbtTag, FromNbtTag, ToNbtTag};
 use std::{
     fmt,
     io::{Cursor, Write},
     str::FromStr,
 };
 
+use azalea_buf::{BufReadError, McBufReadable, McBufWritable};
 #[cfg(feature = "serde")]
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use simdnbt::{owned::NbtTag, FromNbtTag, ToNbtTag};
 
 #[derive(Hash, Clone, PartialEq, Eq)]
 pub struct ResourceLocation {
@@ -101,7 +101,7 @@ impl<'de> Deserialize<'de> for ResourceLocation {
 }
 
 impl FromNbtTag for ResourceLocation {
-    fn from_nbt_tag(tag: &simdnbt::borrow::NbtTag) -> Option<Self> {
+    fn from_nbt_tag(tag: simdnbt::borrow::NbtTag) -> Option<Self> {
         tag.string().and_then(|s| s.to_str().parse().ok())
     }
 }

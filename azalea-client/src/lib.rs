@@ -16,7 +16,7 @@ mod client;
 pub mod configuration;
 pub mod disconnect;
 mod entity_query;
-mod events;
+pub mod events;
 pub mod interact;
 pub mod inventory;
 mod local_player;
@@ -36,7 +36,7 @@ pub use client::{
     TickBroadcast,
 };
 pub use events::Event;
-pub use local_player::{GameProfileComponent, InstanceHolder, TabList};
+pub use local_player::{GameProfileComponent, Hunger, InstanceHolder, TabList};
 pub use movement::{
     PhysicsState, SprintDirection, StartSprintEvent, StartWalkEvent, WalkDirection,
 };

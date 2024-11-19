@@ -16,7 +16,7 @@ use crate::{
         can_use_game_master_blocks, check_is_interaction_restricted, CurrentSequenceNumber,
         HitResultComponent, SwingArmEvent,
     },
-    inventory::{InventoryComponent, InventorySet},
+    inventory::{Inventory, InventorySet},
     local_player::{LocalGameMode, PermissionLevel, PlayerAbilities},
     movement::MoveEventsSet,
     packet_handling::game::SendPacketEvent,
@@ -33,7 +33,12 @@ impl Plugin for MinePlugin {
             .add_event::<StopMiningBlockEvent>()
             .add_event::<MineBlockProgressEvent>()
             .add_event::<AttackBlockEvent>()
-            .add_systems(GameTick, continue_mining_block.before(PhysicsSet))
+            .add_systems(
+                GameTick,
+                (continue_mining_block, handle_auto_mine)
+                    .chain()
+                    .before(PhysicsSet),
+            )
             .add_systems(
                 Update,
                 (
@@ -65,6 +70,71 @@ impl Client {
             entity: self.entity,
             position,
         });
+    }
+
+    /// When enabled, the bot will mine any block that it is looking at if it is
+    /// reachable.
+    pub fn left_click_mine(&self, enabled: bool) {
+        let mut ecs = self.ecs.lock();
+        let mut entity_mut = ecs.entity_mut(self.entity);
+
+        if enabled {
+            entity_mut.insert(LeftClickMine);
+        } else {
+            entity_mut.remove::<LeftClickMine>();
+        }
+    }
+}
+
+/// A component that simulates the client holding down left click to mine the
+/// block that it's facing, but this only interacts with blocks and not
+/// entities.
+#[derive(Component)]
+pub struct LeftClickMine;
+
+#[allow(clippy::type_complexity)]
+fn handle_auto_mine(
+    mut query: Query<
+        (
+            &HitResultComponent,
+            Entity,
+            Option<&Mining>,
+            &Inventory,
+            &MineBlockPos,
+            &MineItem,
+        ),
+        With<LeftClickMine>,
+    >,
+    mut start_mining_block_event: EventWriter<StartMiningBlockEvent>,
+    mut stop_mining_block_event: EventWriter<StopMiningBlockEvent>,
+) {
+    for (
+        hit_result_component,
+        entity,
+        mining,
+        inventory,
+        current_mining_pos,
+        current_mining_item,
+    ) in &mut query.iter_mut()
+    {
+        let block_pos = hit_result_component.block_pos;
+
+        if (mining.is_none()
+            || !is_same_mining_target(
+                block_pos,
+                inventory,
+                current_mining_pos,
+                current_mining_item,
+            ))
+            && !hit_result_component.miss
+        {
+            start_mining_block_event.send(StartMiningBlockEvent {
+                entity,
+                position: block_pos,
+            });
+        } else if mining.is_some() && hit_result_component.miss {
+            stop_mining_block_event.send(StopMiningBlockEvent { entity });
+        }
     }
 }
 
@@ -123,7 +193,7 @@ fn handle_start_mining_block_with_direction_event(
     mut query: Query<(
         &InstanceName,
         &LocalGameMode,
-        &InventoryComponent,
+        &Inventory,
         &FluidOnEyes,
         &Physics,
         Option<&Mining>,
@@ -289,7 +359,7 @@ pub struct AttackBlockEvent {
 /// mining.
 fn is_same_mining_target(
     target_block: BlockPos,
-    inventory: &InventoryComponent,
+    inventory: &Inventory,
     current_mining_pos: &MineBlockPos,
     current_mining_item: &MineItem,
 ) -> bool {
@@ -329,16 +399,16 @@ impl MineProgress {
 /// A component that stores the number of ticks that we've been mining the same
 /// block for. This is a float even though it should only ever be a round
 /// number.
-#[derive(Component, Debug, Default, Deref, DerefMut)]
+#[derive(Component, Clone, Debug, Default, Deref, DerefMut)]
 pub struct MineTicks(pub f32);
 
 /// A component that stores the position of the block we're currently mining.
-#[derive(Component, Debug, Default, Deref, DerefMut)]
+#[derive(Component, Clone, Debug, Default, Deref, DerefMut)]
 pub struct MineBlockPos(pub Option<BlockPos>);
 
 /// A component that contains the item we're currently using to mine. If we're
 /// not mining anything, it'll be [`ItemSlot::Empty`].
-#[derive(Component, Debug, Default, Deref, DerefMut)]
+#[derive(Component, Clone, Debug, Default, Deref, DerefMut)]
 pub struct MineItem(pub ItemSlot);
 
 /// Sent when we completed mining a block.
@@ -348,12 +418,12 @@ pub struct FinishMiningBlockEvent {
     pub position: BlockPos,
 }
 
-fn handle_finish_mining_block_event(
+pub fn handle_finish_mining_block_event(
     mut events: EventReader<FinishMiningBlockEvent>,
     mut query: Query<(
         &InstanceName,
         &LocalGameMode,
-        &InventoryComponent,
+        &Inventory,
         &PlayerAbilities,
         &PermissionLevel,
         &mut CurrentSequenceNumber,
@@ -414,7 +484,7 @@ fn handle_finish_mining_block_event(
 pub struct StopMiningBlockEvent {
     pub entity: Entity,
 }
-fn handle_stop_mining_block_event(
+pub fn handle_stop_mining_block_event(
     mut events: EventReader<StopMiningBlockEvent>,
     mut send_packet_events: EventWriter<SendPacketEvent>,
     mut mine_block_progress_events: EventWriter<MineBlockProgressEvent>,
@@ -447,12 +517,12 @@ fn handle_stop_mining_block_event(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn continue_mining_block(
+pub fn continue_mining_block(
     mut query: Query<(
         Entity,
         &InstanceName,
         &LocalGameMode,
-        &InventoryComponent,
+        &Inventory,
         &MineBlockPos,
         &MineItem,
         &FluidOnEyes,

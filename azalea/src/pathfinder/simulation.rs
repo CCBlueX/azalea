@@ -2,9 +2,7 @@
 
 use std::sync::Arc;
 
-use azalea_client::{
-    inventory::InventoryComponent, packet_handling::game::SendPacketEvent, PhysicsState,
-};
+use azalea_client::{inventory::Inventory, packet_handling::game::SendPacketEvent, PhysicsState};
 use azalea_core::{position::Vec3, resource_location::ResourceLocation, tick::GameTick};
 use azalea_entity::{
     attributes::AttributeInstance, Attributes, EntityDimensions, LookDirection, Physics, Position,
@@ -22,7 +20,7 @@ pub struct SimulatedPlayerBundle {
     pub physics_state: PhysicsState,
     pub look_direction: LookDirection,
     pub attributes: Attributes,
-    pub inventory: InventoryComponent,
+    pub inventory: Inventory,
 }
 
 impl SimulatedPlayerBundle {
@@ -41,7 +39,7 @@ impl SimulatedPlayerBundle {
                 speed: AttributeInstance::new(0.1),
                 attack_speed: AttributeInstance::new(4.0),
             },
-            inventory: InventoryComponent::default(),
+            inventory: Inventory::default(),
         }
     }
 }
@@ -108,7 +106,7 @@ fn create_simulation_player_complete_bundle(
             partial_instance: Arc::new(RwLock::new(PartialInstance::default())),
             instance: instance.clone(),
         },
-        InventoryComponent::default(),
+        Inventory::default(),
     )
 }
 
@@ -144,8 +142,21 @@ impl Simulation {
         self.app.update();
         self.app.world.run_schedule(GameTick);
     }
+    pub fn component<T: Component + Clone>(&self) -> T {
+        self.app.world.get::<T>(self.entity).unwrap().clone()
+    }
+    pub fn get_component<T: Component + Clone>(&self) -> Option<T> {
+        self.app.world.get::<T>(self.entity).cloned()
+    }
     pub fn position(&self) -> Vec3 {
-        **self.app.world.get::<Position>(self.entity).unwrap()
+        *self.component::<Position>()
+    }
+    pub fn is_mining(&self) -> bool {
+        // return true if the component is present and Some
+        self.get_component::<azalea_client::mining::MineBlockPos>()
+            .map(|c| *c)
+            .flatten()
+            .is_some()
     }
 }
 

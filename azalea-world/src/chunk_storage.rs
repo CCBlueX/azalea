@@ -1,13 +1,3 @@
-use crate::heightmap::Heightmap;
-use crate::heightmap::HeightmapKind;
-use crate::palette::PalettedContainer;
-use crate::palette::PalettedContainerKind;
-use azalea_block::BlockState;
-use azalea_buf::{BufReadError, McBufReadable, McBufWritable};
-use azalea_core::position::{BlockPos, ChunkBlockPos, ChunkPos, ChunkSectionBlockPos};
-use nohash_hasher::IntMap;
-use parking_lot::RwLock;
-use simdnbt::owned::NbtCompound;
 use std::collections::hash_map::Entry;
 use std::str::FromStr;
 use std::{
@@ -16,7 +6,19 @@ use std::{
     io::{Cursor, Write},
     sync::{Arc, Weak},
 };
+
+use azalea_block::BlockState;
+use azalea_buf::{BufReadError, McBufReadable, McBufWritable};
+use azalea_core::position::{BlockPos, ChunkBlockPos, ChunkPos, ChunkSectionBlockPos};
+use nohash_hasher::IntMap;
+use parking_lot::RwLock;
+use simdnbt::owned::NbtCompound;
 use tracing::{debug, trace, warn};
+
+use crate::heightmap::Heightmap;
+use crate::heightmap::HeightmapKind;
+use crate::palette::PalettedContainer;
+use crate::palette::PalettedContainerKind;
 
 const SECTION_HEIGHT: u32 = 16;
 
@@ -515,9 +517,9 @@ impl Default for ChunkStorage {
 pub fn section_index(y: i32, min_y: i32) -> u32 {
     if y < min_y {
         #[cfg(debug_assertions)]
-        panic!("y ({y}) must be at most {min_y}");
+        warn!("y ({y}) must be at most {min_y}");
         #[cfg(not(debug_assertions))]
-        tracing::error!("y ({y}) must be at least {min_y}")
+        trace!("y ({y}) must be at least {min_y}")
     };
     let min_section_index = min_y >> 4;
     ((y >> 4) - min_section_index) as u32

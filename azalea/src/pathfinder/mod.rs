@@ -11,21 +11,12 @@ pub mod moves;
 pub mod simulation;
 pub mod world;
 
-use crate::bot::{JumpEvent, LookAtEvent};
-use crate::pathfinder::astar::a_star;
-use crate::WalkDirection;
+use std::collections::VecDeque;
+use std::sync::atomic::{self, AtomicUsize};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use crate::app::{App, Plugin};
-use crate::ecs::{
-    component::Component,
-    entity::Entity,
-    event::{EventReader, EventWriter},
-    query::{With, Without},
-    system::{Commands, Query, Res},
-};
-use crate::pathfinder::moves::PathfinderCtx;
-use crate::pathfinder::world::CachedWorld;
-use azalea_client::inventory::{InventoryComponent, InventorySet, SetSelectedHotbarSlotEvent};
+use azalea_client::inventory::{Inventory, InventorySet, SetSelectedHotbarSlotEvent};
 use azalea_client::mining::{Mining, StartMiningBlockEvent};
 use azalea_client::movement::MoveEventsSet;
 use azalea_client::{InstanceHolder, StartSprintEvent, StartWalkEvent};
@@ -42,10 +33,6 @@ use bevy_ecs::query::Changed;
 use bevy_ecs::schedule::IntoSystemConfigs;
 use bevy_tasks::{AsyncComputeTaskPool, Task};
 use futures_lite::future;
-use std::collections::VecDeque;
-use std::sync::atomic::{self, AtomicUsize};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tracing::{debug, error, info, trace, warn};
 
 use self::debug::debug_render_path_with_particles;
@@ -53,6 +40,19 @@ pub use self::debug::PathfinderDebugParticles;
 use self::goals::Goal;
 use self::mining::MiningCache;
 use self::moves::{ExecuteCtx, IsReachedCtx, SuccessorsFn};
+use crate::app::{App, Plugin};
+use crate::bot::{JumpEvent, LookAtEvent};
+use crate::ecs::{
+    component::Component,
+    entity::Entity,
+    event::{EventReader, EventWriter},
+    query::{With, Without},
+    system::{Commands, Query, Res},
+};
+use crate::pathfinder::astar::a_star;
+use crate::pathfinder::moves::PathfinderCtx;
+use crate::pathfinder::world::CachedWorld;
+use crate::WalkDirection;
 
 #[derive(Clone, Default)]
 pub struct PathfinderPlugin;
@@ -139,7 +139,7 @@ pub struct PathFoundEvent {
 }
 
 #[allow(clippy::type_complexity)]
-fn add_default_pathfinder(
+pub fn add_default_pathfinder(
     mut commands: Commands,
     mut query: Query<Entity, (Without<Pathfinder>, With<LocalEntity>, With<Player>)>,
 ) {
@@ -193,7 +193,7 @@ impl PathfinderClientExt for azalea_client::Client {
 #[derive(Component)]
 pub struct ComputePath(Task<Option<PathFoundEvent>>);
 
-fn goto_listener(
+pub fn goto_listener(
     mut commands: Commands,
     mut events: EventReader<GotoEvent>,
     mut query: Query<(
@@ -201,7 +201,7 @@ fn goto_listener(
         Option<&ExecutingPath>,
         &Position,
         &InstanceName,
-        &InventoryComponent,
+        &Inventory,
     )>,
     instance_container: Res<InstanceContainer>,
 ) {
@@ -340,7 +340,7 @@ fn goto_listener(
 }
 
 // poll the tasks and send the PathFoundEvent if they're done
-fn handle_tasks(
+pub fn handle_tasks(
     mut commands: Commands,
     mut transform_tasks: Query<(Entity, &mut ComputePath)>,
     mut path_found_events: EventWriter<PathFoundEvent>,
@@ -358,13 +358,13 @@ fn handle_tasks(
 }
 
 // set the path for the target entity when we get the PathFoundEvent
-fn path_found_listener(
+pub fn path_found_listener(
     mut events: EventReader<PathFoundEvent>,
     mut query: Query<(
         &mut Pathfinder,
         Option<&mut ExecutingPath>,
         &InstanceName,
-        &InventoryComponent,
+        &Inventory,
     )>,
     instance_container: Res<InstanceContainer>,
     mut commands: Commands,
@@ -446,7 +446,7 @@ fn path_found_listener(
     }
 }
 
-fn timeout_movement(
+pub fn timeout_movement(
     mut query: Query<(&Pathfinder, &mut ExecutingPath, &Position, Option<&Mining>)>,
 ) {
     for (pathfinder, mut executing_path, position, mining) in &mut query {
@@ -481,7 +481,7 @@ fn timeout_movement(
     }
 }
 
-fn check_node_reached(
+pub fn check_node_reached(
     mut query: Query<(
         Entity,
         &mut Pathfinder,
@@ -575,13 +575,8 @@ fn check_node_reached(
     }
 }
 
-fn check_for_path_obstruction(
-    mut query: Query<(
-        &Pathfinder,
-        &mut ExecutingPath,
-        &InstanceName,
-        &InventoryComponent,
-    )>,
+pub fn check_for_path_obstruction(
+    mut query: Query<(&Pathfinder, &mut ExecutingPath, &InstanceName, &Inventory)>,
     instance_container: Res<InstanceContainer>,
 ) {
     for (pathfinder, mut executing_path, instance_name, inventory) in &mut query {
@@ -680,7 +675,7 @@ pub fn recalculate_near_end_of_path(
 }
 
 #[allow(clippy::type_complexity)]
-fn tick_execute_path(
+pub fn tick_execute_path(
     mut query: Query<(
         Entity,
         &mut ExecutingPath,
@@ -688,7 +683,7 @@ fn tick_execute_path(
         &Physics,
         Option<&Mining>,
         &InstanceHolder,
-        &InventoryComponent,
+        &Inventory,
     )>,
     mut look_at_events: EventWriter<LookAtEvent>,
     mut sprint_events: EventWriter<StartSprintEvent>,
@@ -724,7 +719,7 @@ fn tick_execute_path(
     }
 }
 
-fn recalculate_if_has_goal_but_no_path(
+pub fn recalculate_if_has_goal_but_no_path(
     mut query: Query<(Entity, &mut Pathfinder), Without<ExecutingPath>>,
     mut goto_events: EventWriter<GotoEvent>,
 ) {
@@ -753,7 +748,7 @@ pub struct StopPathfindingEvent {
     pub force: bool,
 }
 
-fn handle_stop_pathfinding_event(
+pub fn handle_stop_pathfinding_event(
     mut events: EventReader<StopPathfindingEvent>,
     mut query: Query<(&mut Pathfinder, &mut ExecutingPath)>,
     mut walk_events: EventWriter<StartWalkEvent>,
@@ -787,7 +782,7 @@ fn handle_stop_pathfinding_event(
     }
 }
 
-fn stop_pathfinding_on_instance_change(
+pub fn stop_pathfinding_on_instance_change(
     mut query: Query<(Entity, &mut ExecutingPath), Changed<InstanceName>>,
     mut stop_pathfinding_events: EventWriter<StopPathfindingEvent>,
 ) {
@@ -805,7 +800,7 @@ fn stop_pathfinding_on_instance_change(
 
 /// Checks whether the path has been obstructed, and returns Some(index) if it
 /// has been. The index is of the first obstructed node.
-fn check_path_obstructed<SuccessorsFn>(
+pub fn check_path_obstructed<SuccessorsFn>(
     mut current_position: BlockPos,
     path: &VecDeque<astar::Movement<BlockPos, moves::MoveData>>,
     successors_fn: SuccessorsFn,
@@ -866,10 +861,32 @@ mod tests {
         GotoEvent,
     };
 
-    fn setup_simulation(
+    fn setup_blockposgoal_simulation(
         partial_chunks: &mut PartialChunkStorage,
         start_pos: BlockPos,
         end_pos: BlockPos,
+        solid_blocks: Vec<BlockPos>,
+    ) -> Simulation {
+        let mut simulation = setup_simulation_world(partial_chunks, start_pos, solid_blocks);
+
+        // you can uncomment this while debugging tests to get trace logs
+        // simulation.app.add_plugins(bevy_log::LogPlugin {
+        //     level: bevy_log::Level::TRACE,
+        //     filter: "".to_string(),
+        // });
+
+        simulation.app.world.send_event(GotoEvent {
+            entity: simulation.entity,
+            goal: Arc::new(BlockPosGoal(end_pos)),
+            successors_fn: moves::default_move,
+            allow_mining: false,
+        });
+        simulation
+    }
+
+    fn setup_simulation_world(
+        partial_chunks: &mut PartialChunkStorage,
+        start_pos: BlockPos,
         solid_blocks: Vec<BlockPos>,
     ) -> Simulation {
         let mut chunk_positions = HashSet::new();
@@ -889,43 +906,33 @@ mod tests {
             start_pos.y as f64,
             start_pos.z as f64 + 0.5,
         ));
-        let mut simulation = Simulation::new(chunks, player);
-
-        // you can uncomment this while debugging tests to get trace logs
-        // simulation.app.add_plugins(bevy_log::LogPlugin {
-        //     level: bevy_log::Level::TRACE,
-        //     filter: "".to_string(),
-        // });
-
-        simulation.app.world.send_event(GotoEvent {
-            entity: simulation.entity,
-            goal: Arc::new(BlockPosGoal(end_pos)),
-            successors_fn: moves::default_move,
-            allow_mining: false,
-        });
-        simulation
+        Simulation::new(chunks, player)
     }
 
     pub fn assert_simulation_reaches(simulation: &mut Simulation, ticks: usize, end_pos: BlockPos) {
-        // wait until the bot starts moving
+        wait_until_bot_starts_moving(simulation);
+        for _ in 0..ticks {
+            simulation.tick();
+        }
+        assert_eq!(BlockPos::from(simulation.position()), end_pos);
+    }
+
+    pub fn wait_until_bot_starts_moving(simulation: &mut Simulation) {
         let start_pos = simulation.position();
         let start_time = Instant::now();
         while simulation.position() == start_pos
+            && !simulation.is_mining()
             && start_time.elapsed() < Duration::from_millis(500)
         {
             simulation.tick();
             std::thread::yield_now();
         }
-        for _ in 0..ticks {
-            simulation.tick();
-        }
-        assert_eq!(BlockPos::from(simulation.position()), end_pos,);
     }
 
     #[test]
     fn test_simple_forward() {
         let mut partial_chunks = PartialChunkStorage::default();
-        let mut simulation = setup_simulation(
+        let mut simulation = setup_blockposgoal_simulation(
             &mut partial_chunks,
             BlockPos::new(0, 71, 0),
             BlockPos::new(0, 71, 1),
@@ -937,7 +944,7 @@ mod tests {
     #[test]
     fn test_double_diagonal_with_walls() {
         let mut partial_chunks = PartialChunkStorage::default();
-        let mut simulation = setup_simulation(
+        let mut simulation = setup_blockposgoal_simulation(
             &mut partial_chunks,
             BlockPos::new(0, 71, 0),
             BlockPos::new(2, 71, 2),
@@ -955,7 +962,7 @@ mod tests {
     #[test]
     fn test_jump_with_sideways_momentum() {
         let mut partial_chunks = PartialChunkStorage::default();
-        let mut simulation = setup_simulation(
+        let mut simulation = setup_blockposgoal_simulation(
             &mut partial_chunks,
             BlockPos::new(0, 71, 3),
             BlockPos::new(5, 76, 0),
@@ -977,7 +984,7 @@ mod tests {
     #[test]
     fn test_parkour_2_block_gap() {
         let mut partial_chunks = PartialChunkStorage::default();
-        let mut simulation = setup_simulation(
+        let mut simulation = setup_blockposgoal_simulation(
             &mut partial_chunks,
             BlockPos::new(0, 71, 0),
             BlockPos::new(0, 71, 3),
@@ -989,7 +996,7 @@ mod tests {
     #[test]
     fn test_descend_and_parkour_2_block_gap() {
         let mut partial_chunks = PartialChunkStorage::default();
-        let mut simulation = setup_simulation(
+        let mut simulation = setup_blockposgoal_simulation(
             &mut partial_chunks,
             BlockPos::new(0, 71, 0),
             BlockPos::new(3, 67, 4),
@@ -1008,7 +1015,7 @@ mod tests {
     #[test]
     fn test_small_descend_and_parkour_2_block_gap() {
         let mut partial_chunks = PartialChunkStorage::default();
-        let mut simulation = setup_simulation(
+        let mut simulation = setup_blockposgoal_simulation(
             &mut partial_chunks,
             BlockPos::new(0, 71, 0),
             BlockPos::new(0, 70, 5),
@@ -1025,7 +1032,7 @@ mod tests {
     #[test]
     fn test_quickly_descend() {
         let mut partial_chunks = PartialChunkStorage::default();
-        let mut simulation = setup_simulation(
+        let mut simulation = setup_blockposgoal_simulation(
             &mut partial_chunks,
             BlockPos::new(0, 71, 0),
             BlockPos::new(0, 68, 3),
@@ -1042,7 +1049,7 @@ mod tests {
     #[test]
     fn test_2_gap_ascend_thrice() {
         let mut partial_chunks = PartialChunkStorage::default();
-        let mut simulation = setup_simulation(
+        let mut simulation = setup_blockposgoal_simulation(
             &mut partial_chunks,
             BlockPos::new(0, 71, 0),
             BlockPos::new(3, 74, 0),
@@ -1059,7 +1066,7 @@ mod tests {
     #[test]
     fn test_consecutive_3_gap_parkour() {
         let mut partial_chunks = PartialChunkStorage::default();
-        let mut simulation = setup_simulation(
+        let mut simulation = setup_blockposgoal_simulation(
             &mut partial_chunks,
             BlockPos::new(0, 71, 0),
             BlockPos::new(4, 71, 12),

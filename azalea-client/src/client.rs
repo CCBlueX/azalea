@@ -1,27 +1,11 @@
-use crate::{
-    attack::{self, AttackPlugin},
-    chat::ChatPlugin,
-    chunks::{ChunkBatchInfo, ChunkPlugin},
-    configuration::ConfigurationPlugin,
-    disconnect::{DisconnectEvent, DisconnectPlugin},
-    events::{Event, EventPlugin, LocalPlayerEvents},
-    interact::{CurrentSequenceNumber, InteractPlugin},
-    inventory::{InventoryComponent, InventoryPlugin},
-    local_player::{
-        death_event, GameProfileComponent, Hunger, InstanceHolder, PermissionLevel,
-        PlayerAbilities, TabList,
-    },
-    mining::{self, MinePlugin},
-    movement::{LastSentLookDirection, PhysicsState, PlayerMovePlugin},
-    packet_handling::{
-        login::{self, LoginSendPacketQueue},
-        PacketHandlerPlugin,
-    },
-    player::retroactively_add_game_profile_component,
-    raw_connection::RawConnection,
-    respawn::RespawnPlugin,
-    task_pool::TaskPoolPlugin,
-    Account, PlayerInfo,
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    io,
+    net::SocketAddr,
+    ops::Deref,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
 use azalea_auth::{game_profile::GameProfile, sessionserver::ClientSessionServerError};
@@ -68,15 +52,6 @@ use bevy_ecs::{
 use bevy_time::TimePlugin;
 use derive_more::Deref;
 use parking_lot::{Mutex, RwLock};
-use std::{
-    collections::HashMap,
-    fmt::Debug,
-    io,
-    net::SocketAddr,
-    ops::Deref,
-    sync::Arc,
-    time::{Duration, Instant},
-};
 use thiserror::Error;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -84,6 +59,32 @@ use tokio::{
 };
 use tracing::{debug, error};
 use uuid::Uuid;
+
+use crate::{
+    attack::{self, AttackPlugin},
+    chat::ChatPlugin,
+    chunks::{ChunkBatchInfo, ChunkPlugin},
+    configuration::ConfigurationPlugin,
+    disconnect::{DisconnectEvent, DisconnectPlugin},
+    events::{Event, EventPlugin, LocalPlayerEvents},
+    interact::{CurrentSequenceNumber, InteractPlugin},
+    inventory::{Inventory, InventoryPlugin},
+    local_player::{
+        death_event, GameProfileComponent, Hunger, InstanceHolder, PermissionLevel,
+        PlayerAbilities, TabList,
+    },
+    mining::{self, MinePlugin},
+    movement::{LastSentLookDirection, PhysicsState, PlayerMovePlugin},
+    packet_handling::{
+        login::{self, LoginSendPacketQueue},
+        PacketHandlerPlugin,
+    },
+    player::retroactively_add_game_profile_component,
+    raw_connection::RawConnection,
+    respawn::RespawnPlugin,
+    task_pool::TaskPoolPlugin,
+    Account, PlayerInfo,
+};
 
 /// `Client` has the things that a user interacting with the library will want.
 ///
@@ -457,7 +458,7 @@ impl Client {
                     debug!("Got compression request {:?}", p.compression_threshold);
                     conn.set_compression_threshold(p.compression_threshold);
                 }
-                ClientboundLoginPacket::GameProfile(p) => {
+                ClientboundLoginPacket::LoginFinished(p) => {
                     debug!(
                         "Got profile {:?}. handshake is finished and we're now switching to the configuration state",
                         p.game_profile
@@ -601,7 +602,7 @@ impl Client {
         }
 
         if self.logged_in() {
-            tracing::debug!(
+            debug!(
                 "Sending client information (already logged in): {:?}",
                 client_information
             );
@@ -688,7 +689,7 @@ pub struct LocalPlayerBundle {
 pub struct JoinedClientBundle {
     // note that InstanceHolder isn't here because it's set slightly before we fully join the world
     pub physics_state: PhysicsState,
-    pub inventory: InventoryComponent,
+    pub inventory: Inventory,
     pub tab_list: TabList,
     pub current_sequence_number: CurrentSequenceNumber,
     pub last_sent_direction: LastSentLookDirection,

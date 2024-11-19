@@ -1,6 +1,5 @@
 #![doc = include_str!("../README.md")]
 #![feature(trait_alias)]
-#![feature(lazy_cell)]
 
 pub mod clip;
 pub mod collision;
@@ -423,11 +422,12 @@ fn jump_boost_power() -> f64 {
 #[cfg(test)]
 mod tests {
 
-    use super::*;
     use azalea_core::{position::ChunkPos, resource_location::ResourceLocation};
     use azalea_entity::{EntityBundle, EntityPlugin};
     use azalea_world::{Chunk, MinecraftEntityId, PartialInstance};
     use uuid::Uuid;
+
+    use super::*;
 
     /// You need an app to spawn entities in the world and do updates.
     fn make_test_app() -> App {

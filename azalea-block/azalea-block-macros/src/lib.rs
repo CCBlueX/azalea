@@ -2,11 +2,12 @@
 
 mod utils;
 
+use std::collections::HashMap;
+use std::fmt::Write;
+
 use proc_macro::TokenStream;
 use proc_macro2::TokenTree;
 use quote::quote;
-use std::collections::HashMap;
-use std::fmt::Write;
 use syn::{
     braced,
     ext::IdentExt,
@@ -829,7 +830,7 @@ pub fn make_block_states(input: TokenStream) -> TokenStream {
 fn name_to_ident(name: &str) -> Ident {
     let ident_str = match name {
         "type" => "kind",
-        _ => &name,
+        _ => name,
     };
     Ident::new(ident_str, proc_macro2::Span::call_site())
 }

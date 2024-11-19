@@ -581,7 +581,7 @@ impl Style {
 #[cfg(feature = "simdnbt")]
 impl simdnbt::Deserialize for Style {
     fn from_compound(
-        compound: &simdnbt::borrow::NbtCompound,
+        compound: simdnbt::borrow::NbtCompound,
     ) -> Result<Self, simdnbt::DeserializeError> {
         let bold = compound.byte("bold").map(|v| v != 0);
         let italic = compound.byte("italic").map(|v| v != 0);
@@ -605,9 +605,8 @@ impl simdnbt::Deserialize for Style {
 
 #[cfg(test)]
 mod tests {
-    use crate::component::DEFAULT_STYLE;
-
     use super::*;
+    use crate::component::DEFAULT_STYLE;
 
     #[test]
     fn text_color_named_colors() {

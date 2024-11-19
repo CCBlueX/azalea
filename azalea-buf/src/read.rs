@@ -1,13 +1,15 @@
-use super::{UnsizedByteArray, MAX_STRING_LENGTH};
-use byteorder::{ReadBytesExt, BE};
 use std::{
     backtrace::Backtrace,
     collections::HashMap,
     hash::Hash,
     io::{Cursor, Read},
 };
+
+use byteorder::{ReadBytesExt, BE};
 use thiserror::Error;
 use tracing::warn;
+
+use super::{UnsizedByteArray, MAX_STRING_LENGTH};
 
 #[derive(Error, Debug)]
 pub enum BufReadError {
@@ -344,13 +346,13 @@ impl<T: McBufReadable, const N: usize> McBufReadable for [T; N] {
 
 impl McBufReadable for simdnbt::owned::NbtTag {
     fn read_from(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
-        Ok(simdnbt::owned::NbtTag::read(buf)?)
+        Ok(simdnbt::owned::read_tag(buf).map_err(simdnbt::Error::from)?)
     }
 }
 
 impl McBufReadable for simdnbt::owned::NbtCompound {
     fn read_from(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
-        match simdnbt::owned::NbtTag::read(buf)? {
+        match simdnbt::owned::read_tag(buf).map_err(simdnbt::Error::from)? {
             simdnbt::owned::NbtTag::Compound(compound) => Ok(compound),
             _ => Err(BufReadError::Custom("Expected compound tag".to_string())),
         }

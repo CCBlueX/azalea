@@ -1,5 +1,10 @@
 //! Implementations of chat-related features.
 
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use azalea_chat::FormattedText;
 use azalea_protocol::packets::game::{
     clientbound_disguised_chat_packet::ClientboundDisguisedChatPacket,
@@ -14,10 +19,6 @@ use bevy_ecs::{
     event::{EventReader, EventWriter},
     prelude::Event,
     schedule::IntoSystemConfigs,
-};
-use std::{
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
 
@@ -206,7 +207,7 @@ pub struct SendChatEvent {
     pub content: String,
 }
 
-fn handle_send_chat_event(
+pub fn handle_send_chat_event(
     mut events: EventReader<SendChatEvent>,
     mut send_chat_kind_events: EventWriter<SendChatKindEvent>,
 ) {
@@ -249,7 +250,7 @@ pub enum ChatPacketKind {
     Command,
 }
 
-fn handle_send_chat_kind_event(
+pub fn handle_send_chat_kind_event(
     mut events: EventReader<SendChatKindEvent>,
     mut send_packet_events: EventWriter<SendPacketEvent>,
 ) {

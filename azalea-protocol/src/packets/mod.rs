@@ -5,14 +5,16 @@ pub mod handshaking;
 pub mod login;
 pub mod status;
 
-use crate::read::ReadPacketError;
-use azalea_buf::{BufReadError, McBufVarReadable, McBufVarWritable, McBufWritable};
 use std::io::{Cursor, Write};
+
+use azalea_buf::{BufReadError, McBufVarReadable, McBufVarWritable, McBufWritable};
+
+use crate::read::ReadPacketError;
 
 // TODO: rename the packet files to just like clientbound_add_entity instead of
 // clientbound_add_entity_packet
 
-pub const PROTOCOL_VERSION: i32 = 767;
+pub const PROTOCOL_VERSION: i32 = 768;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConnectionProtocol {

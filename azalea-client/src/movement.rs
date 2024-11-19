@@ -1,5 +1,5 @@
-use crate::client::Client;
-use crate::packet_handling::game::SendPacketEvent;
+use std::backtrace::Backtrace;
+
 use azalea_core::position::Vec3;
 use azalea_core::tick::GameTick;
 use azalea_entity::{metadata::Sprinting, Attributes, Jumping};
@@ -20,8 +20,10 @@ use bevy_ecs::{
     component::Component, entity::Entity, event::EventReader, query::With,
     schedule::IntoSystemConfigs, system::Query,
 };
-use std::backtrace::Backtrace;
 use thiserror::Error;
+
+use crate::client::Client;
+use crate::packet_handling::game::SendPacketEvent;
 
 #[derive(Error, Debug)]
 pub enum MovePlayerError {
@@ -458,7 +460,7 @@ fn set_sprinting(
     if sprinting {
         attributes
             .speed
-            .insert(azalea_entity::attributes::sprinting_modifier())
+            .try_insert(azalea_entity::attributes::sprinting_modifier())
             .is_ok()
     } else {
         attributes

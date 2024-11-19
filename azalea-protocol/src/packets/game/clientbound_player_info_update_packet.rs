@@ -1,3 +1,8 @@
+use std::{
+    collections::HashMap,
+    io::{Cursor, Write},
+};
+
 use azalea_auth::game_profile::{GameProfile, ProfilePropertyValue};
 use azalea_buf::{
     BufReadError, McBuf, McBufReadable, McBufVarReadable, McBufVarWritable, McBufWritable,
@@ -5,10 +10,6 @@ use azalea_buf::{
 use azalea_chat::FormattedText;
 use azalea_core::{bitset::FixedBitSet, game_type::GameMode};
 use azalea_protocol_macros::ClientboundGamePacket;
-use std::{
-    collections::HashMap,
-    io::{Cursor, Write},
-};
 use uuid::Uuid;
 
 use super::serverbound_chat_session_update_packet::RemoteChatSessionData;
@@ -26,6 +27,7 @@ pub struct PlayerInfoEntry {
     pub latency: i32,
     pub game_mode: GameMode,
     pub display_name: Option<FormattedText>,
+    pub list_order: i32,
     pub chat_session: Option<RemoteChatSessionData>,
 }
 
@@ -54,6 +56,11 @@ pub struct UpdateLatencyAction {
 #[derive(Clone, Debug, McBuf)]
 pub struct UpdateDisplayNameAction {
     pub display_name: Option<FormattedText>,
+}
+#[derive(Clone, Debug, McBuf)]
+pub struct UpdateListOrderAction {
+    #[var]
+    pub list_order: i32,
 }
 
 impl McBufReadable for ClientboundPlayerInfoUpdatePacket {
@@ -91,6 +98,10 @@ impl McBufReadable for ClientboundPlayerInfoUpdatePacket {
             if actions.update_display_name {
                 let action = UpdateDisplayNameAction::read_from(buf)?;
                 entry.display_name = action.display_name;
+            }
+            if actions.update_list_order {
+                let action = UpdateListOrderAction::read_from(buf)?;
+                entry.list_order = action.list_order;
             }
 
             entries.push(entry);
@@ -159,11 +170,12 @@ pub struct ActionEnumSet {
     pub update_listed: bool,
     pub update_latency: bool,
     pub update_display_name: bool,
+    pub update_list_order: bool,
 }
 
 impl McBufReadable for ActionEnumSet {
     fn read_from(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
-        let set = FixedBitSet::<6>::read_from(buf)?;
+        let set = FixedBitSet::<7>::read_from(buf)?;
         Ok(ActionEnumSet {
             add_player: set.index(0),
             initialize_chat: set.index(1),
@@ -171,13 +183,14 @@ impl McBufReadable for ActionEnumSet {
             update_listed: set.index(3),
             update_latency: set.index(4),
             update_display_name: set.index(5),
+            update_list_order: set.index(6),
         })
     }
 }
 
 impl McBufWritable for ActionEnumSet {
     fn write_into(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
-        let mut set = FixedBitSet::<6>::new();
+        let mut set = FixedBitSet::<7>::new();
         if self.add_player {
             set.set(0);
         }
@@ -195,6 +208,9 @@ impl McBufWritable for ActionEnumSet {
         }
         if self.update_display_name {
             set.set(5);
+        }
+        if self.update_list_order {
+            set.set(6);
         }
         set.write_into(buf)?;
         Ok(())
@@ -214,6 +230,7 @@ mod tests {
             update_listed: false,
             update_latency: true,
             update_display_name: false,
+            update_list_order: true,
         };
         let mut buf = Vec::new();
         data.write_into(&mut buf).unwrap();
