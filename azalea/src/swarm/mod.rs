@@ -1,4 +1,6 @@
 //! Swarms are a way to conveniently control many bots.
+//!
+//! See [`Swarm`] for more information.
 
 mod chat;
 mod events;
@@ -26,8 +28,8 @@ use crate::{BoxHandleFn, DefaultBotPlugins, HandleFn, JoinOpts, NoState, StartEr
 ///
 /// Swarms are created from [`SwarmBuilder`].
 ///
-/// The `S` type parameter is the type of the state for individual bots.
-/// It's used to make the [`Swarm::add`] function work.
+/// Clients can be added to the swarm later via [`Swarm::add`], and can be
+/// removed with [`Client::disconnect`].
 #[derive(Clone, Resource)]
 pub struct Swarm {
     pub ecs_lock: Arc<Mutex<World>>,
@@ -47,7 +49,15 @@ pub struct Swarm {
 }
 
 /// Create a new [`Swarm`].
-pub struct SwarmBuilder<S, SS>
+///
+/// The generics of this struct stand for the following:
+/// - S: State
+/// - SS: Swarm State
+/// - R: Return type of the handler
+/// - SR: Return type of the swarm handler
+///
+/// You shouldn't have to manually set them though, they'll be inferred for you.
+pub struct SwarmBuilder<S, SS, R, SR>
 where
     S: Send + Sync + Clone + Component + 'static,
     SS: Default + Send + Sync + Clone + Resource + 'static,
@@ -61,10 +71,10 @@ where
     /// The state for the overall swarm.
     pub(crate) swarm_state: SS,
     /// The function that's called every time a bot receives an [`Event`].
-    pub(crate) handler: Option<BoxHandleFn<S>>,
+    pub(crate) handler: Option<BoxHandleFn<S, R>>,
     /// The function that's called every time the swarm receives a
     /// [`SwarmEvent`].
-    pub(crate) swarm_handler: Option<BoxSwarmHandleFn<SS>>,
+    pub(crate) swarm_handler: Option<BoxSwarmHandleFn<SS, SR>>,
 
     /// How long we should wait between each bot joining the server. Set to
     /// None to have every bot connect at the same time. None is different than
@@ -72,10 +82,10 @@ where
     /// the previous one to be ready.
     pub(crate) join_delay: Option<std::time::Duration>,
 }
-impl SwarmBuilder<NoState, NoSwarmState> {
+impl SwarmBuilder<NoState, NoSwarmState, (), ()> {
     /// Start creating the swarm.
     #[must_use]
-    pub fn new() -> SwarmBuilder<NoState, NoSwarmState> {
+    pub fn new() -> Self {
         Self::new_without_plugins()
             .add_plugins(DefaultPlugins)
             .add_plugins(DefaultBotPlugins)
@@ -108,7 +118,7 @@ impl SwarmBuilder<NoState, NoSwarmState> {
     /// # }
     /// ```
     #[must_use]
-    pub fn new_without_plugins() -> SwarmBuilder<NoState, NoSwarmState> {
+    pub fn new_without_plugins() -> Self {
         SwarmBuilder {
             // we create the app here so plugins can add onto it.
             // the schedules won't run until [`Self::start`] is called.
@@ -123,7 +133,7 @@ impl SwarmBuilder<NoState, NoSwarmState> {
     }
 }
 
-impl<SS> SwarmBuilder<NoState, SS>
+impl<SS, SR> SwarmBuilder<NoState, SS, (), SR>
 where
     SS: Default + Send + Sync + Clone + Resource + 'static,
 {
@@ -154,15 +164,16 @@ where
     /// # }
     /// ```
     #[must_use]
-    pub fn set_handler<S, Fut>(self, handler: HandleFn<S, Fut>) -> SwarmBuilder<S, SS>
+    pub fn set_handler<S, Fut, R>(self, handler: HandleFn<S, Fut>) -> SwarmBuilder<S, SS, R, SR>
     where
-        Fut: Future<Output = Result<(), anyhow::Error>> + Send + 'static,
+        Fut: Future<Output = R> + Send + 'static,
         S: Send + Sync + Clone + Component + Default + 'static,
     {
         SwarmBuilder {
             handler: Some(Box::new(move |bot, event, state: S| {
                 Box::pin(handler(bot, event, state))
             })),
+            // if we added accounts before the State was set, we've gotta set it to the default now
             states: vec![S::default(); self.accounts.len()],
             app: self.app,
             ..self
@@ -170,7 +181,7 @@ where
     }
 }
 
-impl<S> SwarmBuilder<S, NoSwarmState>
+impl<S, R> SwarmBuilder<S, NoSwarmState, R, ()>
 where
     S: Send + Sync + Clone + Component + 'static,
 {
@@ -202,10 +213,13 @@ where
     /// }
     /// ```
     #[must_use]
-    pub fn set_swarm_handler<SS, Fut>(self, handler: SwarmHandleFn<SS, Fut>) -> SwarmBuilder<S, SS>
+    pub fn set_swarm_handler<SS, Fut, SR>(
+        self,
+        handler: SwarmHandleFn<SS, Fut>,
+    ) -> SwarmBuilder<S, SS, R, SR>
     where
         SS: Default + Send + Sync + Clone + Resource + 'static,
-        Fut: Future<Output = Result<(), anyhow::Error>> + Send + 'static,
+        Fut: Future<Output = SR> + Send + 'static,
     {
         SwarmBuilder {
             handler: self.handler,
@@ -221,10 +235,12 @@ where
     }
 }
 
-impl<S, SS> SwarmBuilder<S, SS>
+impl<S, SS, R, SR> SwarmBuilder<S, SS, R, SR>
 where
     S: Send + Sync + Clone + Component + 'static,
     SS: Default + Send + Sync + Clone + Resource + 'static,
+    R: Send + 'static,
+    SR: Send + 'static,
 {
     /// Add a vec of [`Account`]s to the swarm.
     ///
@@ -232,8 +248,8 @@ where
     /// clients to have different default states, add them one at a time with
     /// [`Self::add_account_with_state`].
     ///
-    /// By default every account will join at the same time, you can add a delay
-    /// with [`Self::join_delay`].
+    /// By default, every account will join at the same time, you can add a
+    /// delay with [`Self::join_delay`].
     #[must_use]
     pub fn add_accounts(mut self, accounts: Vec<Account>) -> Self
     where
@@ -242,8 +258,10 @@ where
         for account in accounts {
             self = self.add_account(account);
         }
+
         self
     }
+
     /// Add a single new [`Account`] to the swarm. Use [`Self::add_accounts`] to
     /// add multiple accounts at a time.
     ///
@@ -254,13 +272,24 @@ where
     where
         S: Default,
     {
-        self.add_account_with_state(account, S::default())
+        self.add_account_with_state_and_opts(account, S::default(), JoinOpts::default())
     }
+
     /// Add an account with a custom initial state. Use just
     /// [`Self::add_account`] to use the Default implementation for the state.
     #[must_use]
     pub fn add_account_with_state(self, account: Account, state: S) -> Self {
         self.add_account_with_state_and_opts(account, state, JoinOpts::default())
+    }
+
+    /// Add an account with a custom initial state. Use just
+    /// [`Self::add_account`] to use the Default implementation for the state.
+    #[must_use]
+    pub fn add_account_with_opts(self, account: Account, opts: JoinOpts) -> Self
+    where
+        S: Default,
+    {
+        self.add_account_with_state_and_opts(account, S::default(), opts)
     }
 
     /// Same as [`Self::add_account_with_state`], but allow passing in custom
@@ -340,9 +369,10 @@ where
         };
 
         let address: ServerAddress = default_join_opts.custom_address.clone().unwrap_or(address);
-        let resolved_address: SocketAddr = match default_join_opts.custom_resolved_address {
-            Some(resolved_address) => resolved_address,
-            None => resolver::resolve_address(&address).await?,
+        let resolved_address = if let Some(a) = default_join_opts.custom_resolved_address {
+            a
+        } else {
+            resolver::resolve_address(&address).await?
         };
 
         let instance_container = Arc::new(RwLock::new(InstanceContainer::default()));
@@ -355,7 +385,7 @@ where
 
         let (run_schedule_sender, run_schedule_receiver) = mpsc::unbounded_channel();
 
-        let main_schedule_label = self.app.main_schedule_label;
+        let main_schedule_label = self.app.main().update_schedule.unwrap();
 
         let ecs_lock =
             start_ecs_runner(self.app, run_schedule_receiver, run_schedule_sender.clone());
@@ -385,7 +415,7 @@ where
 
         // SwarmBuilder (self) isn't Send so we have to take all the things we need out
         // of it
-        let mut swarm_clone = swarm.clone();
+        let swarm_clone = swarm.clone();
         let join_delay = self.join_delay;
         let accounts = self.accounts.clone();
         let states = self.states.clone();
@@ -462,7 +492,7 @@ where
     }
 }
 
-impl Default for SwarmBuilder<NoState, NoSwarmState> {
+impl Default for SwarmBuilder<NoState, NoSwarmState, (), ()> {
     fn default() -> Self {
         Self::new()
     }
@@ -486,8 +516,8 @@ pub enum SwarmEvent {
 }
 
 pub type SwarmHandleFn<SS, Fut> = fn(Swarm, SwarmEvent, SS) -> Fut;
-pub type BoxSwarmHandleFn<SS> =
-    Box<dyn Fn(Swarm, SwarmEvent, SS) -> BoxFuture<'static, Result<(), anyhow::Error>> + Send>;
+pub type BoxSwarmHandleFn<SS, R> =
+    Box<dyn Fn(Swarm, SwarmEvent, SS) -> BoxFuture<'static, R> + Send>;
 
 /// Make a bot [`Swarm`].
 ///
@@ -549,7 +579,6 @@ pub type BoxSwarmHandleFn<SS> =
 ///     }
 ///     Ok(())
 /// }
-
 impl Swarm {
     /// Add a new account to the swarm. You can remove it later by calling
     /// [`Client::disconnect`].
@@ -573,7 +602,7 @@ impl Swarm {
     ///
     /// Returns an `Err` if the bot could not do a handshake successfully.
     pub async fn add_with_opts<S: Component + Clone>(
-        &mut self,
+        &self,
         account: &Account,
         state: S,
         join_opts: &JoinOpts,
@@ -634,7 +663,7 @@ impl Swarm {
     /// This does exponential backoff (though very limited), starting at 5
     /// seconds and doubling up to 15 seconds.
     pub async fn add_and_retry_forever<S: Component + Clone>(
-        &mut self,
+        &self,
         account: &Account,
         state: S,
     ) -> Client {
@@ -645,7 +674,7 @@ impl Swarm {
     /// Same as [`Self::add_and_retry_forever`], but allow passing custom join
     /// options.
     pub async fn add_and_retry_forever_with_opts<S: Component + Clone>(
-        &mut self,
+        &self,
         account: &Account,
         state: S,
         opts: &JoinOpts,
@@ -659,7 +688,17 @@ impl Swarm {
                     let delay = (Duration::from_secs(5) * 2u32.pow(disconnects.min(16)))
                         .min(Duration::from_secs(15));
                     let username = account.username.clone();
-                    error!("Error joining as {username}: {e}. Waiting {delay:?} and trying again.");
+
+                    if let JoinError::Disconnect { reason } = &e {
+                        error!(
+                            "Error joining as {username}, server says: \"{reason}\". Waiting {delay:?} and trying again."
+                        );
+                    } else {
+                        error!(
+                            "Error joining as {username}: {e}. Waiting {delay:?} and trying again."
+                        );
+                    }
+
                     tokio::time::sleep(delay).await;
                 }
             }

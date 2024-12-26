@@ -3,7 +3,6 @@ use std::{
     fmt::Debug,
     io,
     net::SocketAddr,
-    ops::Deref,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -18,24 +17,21 @@ use azalea_entity::{
 };
 use azalea_physics::PhysicsPlugin;
 use azalea_protocol::{
+    common::client_information::ClientInformation,
     connect::{Connection, ConnectionError, Proxy},
     packets::{
-        configuration::{
-            serverbound_client_information_packet::ClientInformation,
-            ClientboundConfigurationPacket, ServerboundConfigurationPacket,
-        },
+        self,
+        config::{ClientboundConfigPacket, ServerboundConfigPacket},
         game::ServerboundGamePacket,
-        handshaking::{
-            client_intention_packet::ClientIntentionPacket, ClientboundHandshakePacket,
+        handshake::{
+            s_intention::ServerboundIntention, ClientboundHandshakePacket,
             ServerboundHandshakePacket,
         },
         login::{
-            serverbound_hello_packet::ServerboundHelloPacket,
-            serverbound_key_packet::ServerboundKeyPacket,
-            serverbound_login_acknowledged_packet::ServerboundLoginAcknowledgedPacket,
-            ClientboundLoginPacket,
+            s_hello::ServerboundHello, s_key::ServerboundKey,
+            s_login_acknowledged::ServerboundLoginAcknowledged, ClientboundLoginPacket,
         },
-        ClientIntention, ConnectionProtocol, PROTOCOL_VERSION,
+        ClientIntention, ConnectionProtocol, Packet, PROTOCOL_VERSION,
     },
     resolver, ServerAddress,
 };
@@ -348,21 +344,18 @@ impl Client {
         address: &ServerAddress,
     ) -> Result<
         (
-            Connection<ClientboundConfigurationPacket, ServerboundConfigurationPacket>,
+            Connection<ClientboundConfigPacket, ServerboundConfigPacket>,
             GameProfile,
         ),
         JoinError,
     > {
         // handshake
-        conn.write(
-            ClientIntentionPacket {
-                protocol_version: PROTOCOL_VERSION,
-                hostname: address.host.clone(),
-                port: address.port,
-                intention: ClientIntention::Login,
-            }
-            .get(),
-        )
+        conn.write(ServerboundIntention {
+            protocol_version: PROTOCOL_VERSION,
+            hostname: address.host.clone(),
+            port: address.port,
+            intention: ClientIntention::Login,
+        })
         .await?;
         let mut conn = conn.login();
 
@@ -375,15 +368,12 @@ impl Client {
         ));
 
         // login
-        conn.write(
-            ServerboundHelloPacket {
-                name: account.username.clone(),
-                // TODO: pretty sure this should generate an offline-mode uuid instead of just
-                // Uuid::default()
-                profile_id: account.uuid.unwrap_or_default(),
-            }
-            .get(),
-        )
+        conn.write(ServerboundHello {
+            name: account.username.clone(),
+            // TODO: pretty sure this should generate an offline-mode uuid instead of just
+            // Uuid::default()
+            profile_id: account.uuid.unwrap_or_default(),
+        })
         .await?;
 
         let (conn, profile) = loop {
@@ -443,13 +433,10 @@ impl Client {
                         }
                     }
 
-                    conn.write(
-                        ServerboundKeyPacket {
-                            key_bytes: e.encrypted_public_key,
-                            encrypted_challenge: e.encrypted_challenge,
-                        }
-                        .get(),
-                    )
+                    conn.write(ServerboundKey {
+                        key_bytes: e.encrypted_public_key,
+                        encrypted_challenge: e.encrypted_challenge,
+                    })
                     .await?;
 
                     conn.set_encryption_key(e.secret_key);
@@ -463,8 +450,7 @@ impl Client {
                         "Got profile {:?}. handshake is finished and we're now switching to the configuration state",
                         p.game_profile
                     );
-                    conn.write(ServerboundLoginAcknowledgedPacket {}.get())
-                        .await?;
+                    conn.write(ServerboundLoginAcknowledged {}).await?;
                     break (conn.configuration(), p.game_profile);
                 }
                 ClientboundLoginPacket::LoginDisconnect(p) => {
@@ -478,6 +464,13 @@ impl Client {
                 }
                 ClientboundLoginPacket::CookieRequest(p) => {
                     debug!("Got cookie request {:?}", p);
+
+                    conn.write(packets::login::ServerboundCookieResponse {
+                        key: p.key,
+                        // cookies aren't implemented
+                        payload: None,
+                    })
+                    .await?;
                 }
             }
         };
@@ -494,8 +487,9 @@ impl Client {
     /// Write a packet directly to the server.
     pub fn write_packet(
         &self,
-        packet: ServerboundGamePacket,
+        packet: impl Packet<ServerboundGamePacket>,
     ) -> Result<(), crate::raw_connection::WritePacketError> {
+        let packet = packet.into_variant();
         self.raw_connection_mut(&mut self.ecs.lock())
             .write_packet(packet)
     }
@@ -524,6 +518,14 @@ impl Client {
     /// Get a component from this client. This will clone the component and
     /// return it.
     ///
+    ///
+    /// If the component can't be cloned, try [`Self::map_component`] instead.
+    /// If it isn't guaranteed to be present, use [`Self::get_component`] or
+    /// [`Self::map_get_component`].
+    ///
+    /// You may also use [`Self::ecs`] and [`Self::query`] directly if you need
+    /// more control over when the ECS is locked.
+    ///
     /// # Panics
     ///
     /// This will panic if the component doesn't exist on the client.
@@ -540,8 +542,54 @@ impl Client {
     }
 
     /// Get a component from this client, or `None` if it doesn't exist.
+    ///
+    /// If the component can't be cloned, try [`Self::map_component`] instead.
+    /// You may also have to use [`Self::ecs`] and [`Self::query`] directly.
     pub fn get_component<T: Component + Clone>(&self) -> Option<T> {
         self.query::<Option<&T>>(&mut self.ecs.lock()).cloned()
+    }
+
+    /// Get a required component for this client and call the given function.
+    ///
+    /// Similar to [`Self::component`], but doesn't clone the component since
+    /// it's passed as a reference. [`Self::ecs`] will remain locked while the
+    /// callback is being run.
+    ///
+    /// If the component is not guaranteed to be present, use
+    /// [`Self::get_component`] instead.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if the component doesn't exist on the client.
+    ///
+    /// ```
+    /// # use azalea_client::{Client, Hunger};
+    /// # fn example(bot: &Client) {
+    /// let hunger = bot.map_component::<Hunger, _>(|h| h.food);
+    /// # }
+    /// ```
+    pub fn map_component<T: Component, R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        let mut ecs = self.ecs.lock();
+        let value = self.query::<&T>(&mut ecs);
+        f(value)
+    }
+
+    /// Optionally get a component for this client and call the given function.
+    ///
+    /// Similar to [`Self::get_component`], but doesn't clone the component
+    /// since it's passed as a reference. [`Self::ecs`] will remain locked
+    /// while the callback is being run.
+    ///
+    /// ```
+    /// # use azalea_client::{Client, mining::Mining};
+    /// # fn example(bot: &Client) {
+    /// let is_mining = bot.map_get_component::<Mining, _>(|m| m.is_some());
+    /// # }
+    /// ```
+    pub fn map_get_component<T: Component, R>(&self, f: impl FnOnce(Option<&T>) -> R) -> R {
+        let mut ecs = self.ecs.lock();
+        let value = self.query::<Option<&T>>(&mut ecs);
+        f(value)
     }
 
     /// Get an `RwLock` with a reference to our (potentially shared) world.
@@ -606,7 +654,7 @@ impl Client {
                 "Sending client information (already logged in): {:?}",
                 client_information
             );
-            self.write_packet(azalea_protocol::packets::game::serverbound_client_information_packet::ServerboundClientInformationPacket { information: client_information.clone() }.get())?;
+            self.write_packet(azalea_protocol::packets::game::s_client_information::ServerboundClientInformation { information: client_information.clone() })?;
         }
 
         Ok(())
@@ -734,17 +782,17 @@ impl Plugin for AzaleaPlugin {
 /// [`DefaultPlugins`].
 #[doc(hidden)]
 pub fn start_ecs_runner(
-    app: App,
+    mut app: App,
     run_schedule_receiver: mpsc::UnboundedReceiver<()>,
     run_schedule_sender: mpsc::UnboundedSender<()>,
 ) -> Arc<Mutex<World>> {
     // all resources should have been added by now so we can take the ecs from the
     // app
-    let ecs = Arc::new(Mutex::new(app.world));
+    let ecs = Arc::new(Mutex::new(std::mem::take(app.world_mut())));
 
     tokio::spawn(run_schedule_loop(
         ecs.clone(),
-        app.main_schedule_label,
+        *app.main().update_schedule.as_ref().unwrap(),
         run_schedule_receiver,
     ));
     tokio::spawn(tick_run_schedule_loop(run_schedule_sender));

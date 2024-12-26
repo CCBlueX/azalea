@@ -1,6 +1,6 @@
 use std::{cell::UnsafeCell, ops::RangeInclusive};
 
-use azalea_block::{BlockState, BlockStates};
+use azalea_block::{properties::Waterlogged, BlockState, BlockStateIntegerRepr, BlockStates};
 use azalea_inventory::Menu;
 use nohash_hasher::IntMap;
 
@@ -8,11 +8,11 @@ use super::costs::BLOCK_BREAK_ADDITIONAL_PENALTY;
 use crate::auto_tool::best_tool_in_hotbar_for_block;
 
 pub struct MiningCache {
-    block_state_id_costs: UnsafeCell<IntMap<u32, f32>>,
+    block_state_id_costs: UnsafeCell<IntMap<BlockStateIntegerRepr, f32>>,
     inventory_menu: Option<Menu>,
 
-    water_block_state_range: RangeInclusive<u32>,
-    lava_block_state_range: RangeInclusive<u32>,
+    water_block_state_range: RangeInclusive<BlockStateIntegerRepr>,
+    lava_block_state_range: RangeInclusive<BlockStateIntegerRepr>,
 
     falling_blocks: Vec<BlockState>,
 }
@@ -22,16 +22,16 @@ impl MiningCache {
         let water_block_states = BlockStates::from(azalea_registry::Block::Water);
         let lava_block_states = BlockStates::from(azalea_registry::Block::Lava);
 
-        let mut water_block_state_range_min = u32::MAX;
-        let mut water_block_state_range_max = u32::MIN;
+        let mut water_block_state_range_min = BlockStateIntegerRepr::MAX;
+        let mut water_block_state_range_max = BlockStateIntegerRepr::MIN;
         for state in water_block_states {
             water_block_state_range_min = water_block_state_range_min.min(state.id);
             water_block_state_range_max = water_block_state_range_max.max(state.id);
         }
         let water_block_state_range = water_block_state_range_min..=water_block_state_range_max;
 
-        let mut lava_block_state_range_min = u32::MAX;
-        let mut lava_block_state_range_max = u32::MIN;
+        let mut lava_block_state_range_min = BlockStateIntegerRepr::MAX;
+        let mut lava_block_state_range_max = BlockStateIntegerRepr::MIN;
         for state in lava_block_states {
             lava_block_state_range_min = lava_block_state_range_min.min(state.id);
             lava_block_state_range_max = lava_block_state_range_max.max(state.id);
@@ -96,8 +96,12 @@ impl MiningCache {
     }
 
     pub fn is_liquid(&self, block: BlockState) -> bool {
+        // this already runs in about 1 nanosecond, so if you wanna try optimizing it at
+        // least run the benchmarks (in benches/checks.rs)
+
         self.water_block_state_range.contains(&block.id)
             || self.lava_block_state_range.contains(&block.id)
+            || is_waterlogged(block)
     }
 
     pub fn is_falling_block(&self, block: BlockState) -> bool {
@@ -105,4 +109,8 @@ impl MiningCache {
             .binary_search_by_key(&block.id, |block| block.id)
             .is_ok()
     }
+}
+
+pub fn is_waterlogged(block: BlockState) -> bool {
+    block.property::<Waterlogged>().unwrap_or_default()
 }

@@ -1,10 +1,11 @@
 //! The goals that a pathfinder can try to reach.
 
+use std::f32::consts::SQRT_2;
+
 use azalea_core::position::{BlockPos, Vec3};
 use azalea_world::ChunkStorage;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::f32::consts::SQRT_2;
 
 use super::costs::{COST_HEURISTIC, FALL_N_BLOCKS_COST, JUMP_ONE_BLOCK_COST};
 
@@ -199,7 +200,7 @@ impl Goal for ReachBlockPosGoal {
         let max_pick_range = 6;
         let actual_pick_range = 4.5;
 
-        let distance = (self.pos - n).length_sqr();
+        let distance = (self.pos - n).length_squared();
         if distance > max_pick_range * max_pick_range {
             return false;
         }

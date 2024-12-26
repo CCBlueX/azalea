@@ -104,14 +104,14 @@ use crate::particle::Particle;
 
 use super::{
     ArmadilloStateKind, EntityDataItem, EntityDataValue, OptionalUnsignedInt, Pose, Quaternion,
-    Rotations, SnifferState, VillagerData,
+    Rotations, SnifferStateKind, VillagerData,
 };
 use azalea_chat::FormattedText;
 use azalea_core::{
     direction::Direction,
     position::{BlockPos, Vec3},
 };
-use azalea_inventory::ItemSlot;
+use azalea_inventory::ItemStack;
 use bevy_ecs::{bundle::Bundle, component::Component};
 use derive_more::{Deref, DerefMut};
 use thiserror::Error;
@@ -140,6 +140,10 @@ impl From<EntityDataValue> for UpdateMetadataError {
     # build the duplicate_field_names set
     previous_field_names = set()
     duplicate_field_names = set()
+
+    # some generic names... we don't like these
+    duplicate_field_names.add('state') # SnifferState instead of State
+
     for entity_id in burger_entity_metadata.keys():
         field_name_map[entity_id] = {}
         for field_name_or_bitfield in get_entity_metadata_names(entity_id, burger_entity_metadata, mappings).values():
@@ -428,7 +432,7 @@ impl From<EntityDataValue> for UpdateMetadataError {
                         elif type_name == 'OptionalUnsignedInt':
                             default = f'OptionalUnsignedInt(Some({default}))' if default != 'Empty' else 'OptionalUnsignedInt(None)'
                         elif type_name == 'ItemStack':
-                            default = f'ItemSlot::Present({default})' if default != 'Empty' else 'ItemSlot::Empty'
+                            default = f'ItemStack::Present({default})' if default != 'Empty' else 'ItemStack::Empty'
                         elif type_name == 'BlockState':
                             default = f'{default}' if default != 'Empty' else 'azalea_block::BlockState::AIR'
                         elif type_name == 'OptionalBlockState':

@@ -423,7 +423,7 @@ impl VoxelShape {
             return None;
         }
         let vector = to - from;
-        if vector.length_sqr() < EPSILON {
+        if vector.length_squared() < EPSILON {
             return None;
         }
         let right_after_start = from + &(vector * 0.0001);
@@ -439,6 +439,7 @@ impl VoxelShape {
                 location: right_after_start,
                 inside: true,
                 miss: false,
+                world_border: false,
             })
         } else {
             AABB::clip_iterable(&self.to_aabbs(), from, to, block_pos)

@@ -4,7 +4,9 @@ use azalea::{
     brigadier::prelude::*,
     entity::{LookDirection, Position},
     interact::HitResultComponent,
+    pathfinder::{ExecutingPath, Pathfinder},
     world::MinecraftEntityId,
+    BlockPos,
 };
 use parking_lot::Mutex;
 
@@ -100,6 +102,50 @@ pub fn register(commands: &mut CommandDispatcher<Mutex<CommandSource>>) {
 
         source.reply(&format!("I'm looking at {block:?} at {block_pos:?}"));
 
+        1
+    }));
+
+    commands.register(literal("getblock").then(argument("x", integer()).then(
+        argument("y", integer()).then(argument("z", integer()).executes(|ctx: &Ctx| {
+            let source = ctx.source.lock();
+            let x = get_integer(ctx, "x").unwrap();
+            let y = get_integer(ctx, "y").unwrap();
+            let z = get_integer(ctx, "z").unwrap();
+            println!("getblock xyz {x} {y} {z}");
+            let block_pos = BlockPos::new(x, y, z);
+            let block = source.bot.world().read().get_block_state(&block_pos);
+            source.reply(&format!("Block at {block_pos:?} is {block:?}"));
+            1
+        })),
+    )));
+
+    commands.register(literal("pathfinderstate").executes(|ctx: &Ctx| {
+        let source = ctx.source.lock();
+        let pathfinder = source.bot.get_component::<Pathfinder>();
+        let Some(pathfinder) = pathfinder else {
+            source.reply("I don't have the Pathfinder ocmponent");
+            return 1;
+        };
+        source.reply(&format!(
+            "pathfinder.is_calculating: {}",
+            pathfinder.is_calculating
+        ));
+
+        let executing_path = source.bot.get_component::<ExecutingPath>();
+        let Some(executing_path) = executing_path else {
+            source.reply("I'm not executing a path");
+            return 1;
+        };
+        source.reply(&format!(
+            "is_path_partial: {}, path.len: {}, queued_path.len: {}",
+            executing_path.is_path_partial,
+            executing_path.path.len(),
+            if let Some(queued) = executing_path.queued_path {
+                queued.len().to_string()
+            } else {
+                "n/a".to_string()
+            },
+        ));
         1
     }));
 }

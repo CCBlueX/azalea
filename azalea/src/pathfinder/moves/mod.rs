@@ -16,15 +16,16 @@ use parking_lot::RwLock;
 use super::{
     astar,
     mining::MiningCache,
+    rel_block_pos::RelBlockPos,
     world::{is_block_state_passable, CachedWorld},
 };
 use crate::{auto_tool::best_tool_in_hotbar_for_block, JumpEvent, LookAtEvent};
 
-type Edge = astar::Edge<BlockPos, MoveData>;
+type Edge = astar::Edge<RelBlockPos, MoveData>;
 
-pub type SuccessorsFn = fn(&mut PathfinderCtx, BlockPos);
+pub type SuccessorsFn = fn(&mut PathfinderCtx, RelBlockPos);
 
-pub fn default_move(ctx: &mut PathfinderCtx, node: BlockPos) {
+pub fn default_move(ctx: &mut PathfinderCtx, node: RelBlockPos) {
     basic::basic_move(ctx, node);
     parkour::parkour_move(ctx, node);
 }
@@ -157,7 +158,7 @@ impl ExecuteCtx<'_, '_, '_, '_, '_, '_, '_> {
     /// of the current node first.
     pub fn mine_while_at_start(&mut self, block: BlockPos) -> bool {
         let horizontal_distance_from_start = (self.start.center() - self.position)
-            .horizontal_distance_sqr()
+            .horizontal_distance_squared()
             .sqrt();
         let at_start_position =
             BlockPos::from(self.position) == self.start && horizontal_distance_from_start < 0.25;

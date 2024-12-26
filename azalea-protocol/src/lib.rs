@@ -9,11 +9,12 @@
 //!
 //! See [`crate::connect::Connection`] for an example.
 
-// these two are necessary for thiserror backtraces
+// this is necessary for thiserror backtraces
 #![feature(error_generic_member_access)]
 
 use std::{fmt::Display, net::SocketAddr, str::FromStr};
 
+pub mod common;
 #[cfg(feature = "connecting")]
 pub mod connect;
 #[cfg(feature = "packets")]
@@ -40,7 +41,7 @@ pub struct ServerAddress {
     pub port: u16,
 }
 
-impl<'a> TryFrom<&'a str> for ServerAddress {
+impl TryFrom<&str> for ServerAddress {
     type Error = String;
 
     /// Convert a Minecraft server address (host:port, the port is optional) to
@@ -55,6 +56,13 @@ impl<'a> TryFrom<&'a str> for ServerAddress {
         let port = parts.next().unwrap_or("25565");
         let port = u16::from_str(port).map_err(|_| "Invalid port specified")?;
         Ok(ServerAddress { host, port })
+    }
+}
+impl TryFrom<String> for ServerAddress {
+    type Error = String;
+
+    fn try_from(string: String) -> Result<Self, Self::Error> {
+        ServerAddress::try_from(string.as_str())
     }
 }
 
@@ -103,13 +111,13 @@ impl serde::Serialize for ServerAddress {
 mod tests {
     use std::io::Cursor;
 
-    use bytes::BytesMut;
     use uuid::Uuid;
 
     use crate::{
         packets::{
-            game::serverbound_chat_packet::{LastSeenMessagesUpdate, ServerboundChatPacket},
-            login::{serverbound_hello_packet::ServerboundHelloPacket, ServerboundLoginPacket},
+            game::s_chat::{LastSeenMessagesUpdate, ServerboundChat},
+            login::{s_hello::ServerboundHello, ServerboundLoginPacket},
+            Packet,
         },
         read::{compression_decoder, read_packet},
         write::{compression_encoder, serialize_packet, write_packet},
@@ -117,21 +125,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_hello_packet() {
-        let packet = ServerboundHelloPacket {
+        let packet = ServerboundHello {
             name: "test".to_string(),
             profile_id: Uuid::nil(),
-        }
-        .get();
+        };
         let mut stream = Vec::new();
-        write_packet(&packet, &mut stream, None, &mut None)
+        write_packet(&packet.into_variant(), &mut stream, None, &mut None)
             .await
             .unwrap();
+
+        assert_eq!(
+            stream,
+            [22, 0, 4, 116, 101, 115, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
 
         let mut stream = Cursor::new(stream);
 
         let _ = read_packet::<ServerboundLoginPacket, _>(
             &mut stream,
-            &mut BytesMut::new(),
+            &mut Cursor::new(Vec::new()),
             None,
             &mut None,
         )
@@ -141,11 +153,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_double_hello_packet() {
-        let packet = ServerboundHelloPacket {
+        let packet = ServerboundHello {
             name: "test".to_string(),
             profile_id: Uuid::nil(),
         }
-        .get();
+        .into_variant();
         let mut stream = Vec::new();
         write_packet(&packet, &mut stream, None, &mut None)
             .await
@@ -155,7 +167,7 @@ mod tests {
             .unwrap();
         let mut stream = Cursor::new(stream);
 
-        let mut buffer = BytesMut::new();
+        let mut buffer = Cursor::new(Vec::new());
 
         let _ = read_packet::<ServerboundLoginPacket, _>(&mut stream, &mut buffer, None, &mut None)
             .await
@@ -170,14 +182,14 @@ mod tests {
         let compression_threshold = 256;
 
         let buf = serialize_packet(
-            &ServerboundChatPacket {
+            &ServerboundChat {
                 message: "a".repeat(256),
                 timestamp: 0,
                 salt: 0,
                 signature: None,
                 last_seen_messages: LastSeenMessagesUpdate::default(),
             }
-            .get(),
+            .into_variant(),
         )
         .unwrap();
 

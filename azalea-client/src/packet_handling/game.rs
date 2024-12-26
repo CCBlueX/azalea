@@ -1,12 +1,14 @@
 use std::{
     collections::HashSet,
     io::Cursor,
+    ops::Add,
     sync::{Arc, Weak},
 };
 
 use azalea_chat::FormattedText;
 use azalea_core::{
     game_type::GameMode,
+    math,
     position::{ChunkPos, Vec3},
     resource_location::ResourceLocation,
 };
@@ -17,14 +19,15 @@ use azalea_entity::{
     Physics, PlayerBundle, Position, RelativeEntityUpdate,
 };
 use azalea_protocol::{
-    packets::game::{
-        clientbound_player_combat_kill_packet::ClientboundPlayerCombatKillPacket,
-        serverbound_accept_teleportation_packet::ServerboundAcceptTeleportationPacket,
-        serverbound_configuration_acknowledged_packet::ServerboundConfigurationAcknowledgedPacket,
-        serverbound_keep_alive_packet::ServerboundKeepAlivePacket,
-        serverbound_move_player_pos_rot_packet::ServerboundMovePlayerPosRotPacket,
-        serverbound_pong_packet::ServerboundPongPacket, ClientboundGamePacket,
-        ServerboundGamePacket,
+    packets::{
+        game::{
+            c_player_combat_kill::ClientboundPlayerCombatKill,
+            s_accept_teleportation::ServerboundAcceptTeleportation,
+            s_configuration_acknowledged::ServerboundConfigurationAcknowledged,
+            s_keep_alive::ServerboundKeepAlive, s_move_player_pos_rot::ServerboundMovePlayerPosRot,
+            s_pong::ServerboundPong, ClientboundGamePacket, ServerboundGamePacket,
+        },
+        Packet,
     },
     read::deserialize_packet,
 };
@@ -103,12 +106,12 @@ pub struct UpdatePlayerEvent {
 }
 
 /// Event for when an entity dies. dies. If it's a local player and there's a
-/// reason in the death screen, the [`ClientboundPlayerCombatKillPacket`] will
+/// reason in the death screen, the [`ClientboundPlayerCombatKill`] will
 /// be included.
 #[derive(Event, Debug, Clone)]
 pub struct DeathEvent {
     pub entity: Entity,
-    pub packet: Option<ClientboundPlayerCombatKillPacket>,
+    pub packet: Option<ClientboundPlayerCombatKill>,
 }
 
 /// A KeepAlive packet is sent from the server to verify that the client is
@@ -340,10 +343,9 @@ pub fn process_packet_events(ecs: &mut World) {
                     "Sending client information because login: {:?}",
                     client_information
                 );
-                send_packet_events.send(SendPacketEvent {
-                    entity: player_entity,
-                    packet: azalea_protocol::packets::game::serverbound_client_information_packet::ServerboundClientInformationPacket { information: client_information.clone() }.get(),
-                });
+                send_packet_events.send(SendPacketEvent::new(player_entity,
+                    azalea_protocol::packets::game::s_client_information::ServerboundClientInformation { information: client_information.clone() },
+                ));
 
                 system_state.apply(ecs);
             }
@@ -435,81 +437,84 @@ pub fn process_packet_events(ecs: &mut World) {
                     continue;
                 };
 
-                let delta_movement = physics.velocity;
+                **last_sent_position = **position;
 
-                let is_x_relative = p.relative_arguments.x;
-                let is_y_relative = p.relative_arguments.y;
-                let is_z_relative = p.relative_arguments.z;
-
-                let (delta_x, new_pos_x) = if is_x_relative {
-                    last_sent_position.x += p.pos.x;
-                    (delta_movement.x, position.x + p.pos.x)
-                } else {
-                    last_sent_position.x = p.pos.x;
-                    (0.0, p.pos.x)
-                };
-                let (delta_y, new_pos_y) = if is_y_relative {
-                    last_sent_position.y += p.pos.y;
-                    (delta_movement.y, position.y + p.pos.y)
-                } else {
-                    last_sent_position.y = p.pos.y;
-                    (0.0, p.pos.y)
-                };
-                let (delta_z, new_pos_z) = if is_z_relative {
-                    last_sent_position.z += p.pos.z;
-                    (delta_movement.z, position.z + p.pos.z)
-                } else {
-                    last_sent_position.z = p.pos.z;
-                    (0.0, p.pos.z)
-                };
-
-                let mut y_rot = p.y_rot;
-                let mut x_rot = p.x_rot;
-                if p.relative_arguments.x_rot {
-                    x_rot += direction.x_rot;
-                }
-                if p.relative_arguments.y_rot {
-                    y_rot += direction.y_rot;
+                fn apply_change<T: Add<Output = T>>(base: T, condition: bool, change: T) -> T {
+                    if condition {
+                        base + change
+                    } else {
+                        change
+                    }
                 }
 
-                physics.velocity = Vec3 {
-                    x: delta_x,
-                    y: delta_y,
-                    z: delta_z,
-                };
-                // we call a function instead of setting the fields ourself since the
-                // function makes sure the rotations stay in their
-                // ranges
-                (direction.y_rot, direction.x_rot) = (y_rot, x_rot);
-                // TODO: minecraft sets "xo", "yo", and "zo" here but idk what that means
-                // so investigate that ig
-                let new_pos = Vec3 {
-                    x: new_pos_x,
-                    y: new_pos_y,
-                    z: new_pos_z,
-                };
+                let new_x = apply_change(position.x, p.relative.x, p.change.pos.x);
+                let new_y = apply_change(position.y, p.relative.y, p.change.pos.y);
+                let new_z = apply_change(position.z, p.relative.z, p.change.pos.z);
 
+                let new_y_rot = apply_change(
+                    direction.y_rot,
+                    p.relative.y_rot,
+                    p.change.look_direction.y_rot,
+                );
+                let new_x_rot = apply_change(
+                    direction.x_rot,
+                    p.relative.x_rot,
+                    p.change.look_direction.x_rot,
+                );
+
+                let mut new_delta_from_rotations = physics.velocity;
+                if p.relative.rotate_delta {
+                    let y_rot_delta = direction.y_rot - new_y_rot;
+                    let x_rot_delta = direction.x_rot - new_x_rot;
+                    new_delta_from_rotations = new_delta_from_rotations
+                        .x_rot(math::to_radians(x_rot_delta as f64) as f32)
+                        .y_rot(math::to_radians(y_rot_delta as f64) as f32);
+                }
+
+                let new_delta = Vec3::new(
+                    apply_change(
+                        new_delta_from_rotations.x,
+                        p.relative.delta_x,
+                        p.change.delta.x,
+                    ),
+                    apply_change(
+                        new_delta_from_rotations.y,
+                        p.relative.delta_y,
+                        p.change.delta.y,
+                    ),
+                    apply_change(
+                        new_delta_from_rotations.z,
+                        p.relative.delta_z,
+                        p.change.delta.z,
+                    ),
+                );
+
+                // apply the updates
+
+                physics.velocity = new_delta;
+
+                (direction.y_rot, direction.x_rot) = (new_y_rot, new_x_rot);
+
+                let new_pos = Vec3::new(new_x, new_y, new_z);
                 if new_pos != **position {
                     **position = new_pos;
                 }
 
-                send_packet_events.send(SendPacketEvent {
-                    entity: player_entity,
-                    packet: ServerboundAcceptTeleportationPacket { id: p.id }.get(),
-                });
-                send_packet_events.send(SendPacketEvent {
-                    entity: player_entity,
-                    packet: ServerboundMovePlayerPosRotPacket {
-                        x: new_pos.x,
-                        y: new_pos.y,
-                        z: new_pos.z,
-                        y_rot,
-                        x_rot,
+                // send the relevant packets
+
+                send_packet_events.send(SendPacketEvent::new(
+                    player_entity,
+                    ServerboundAcceptTeleportation { id: p.id },
+                ));
+                send_packet_events.send(SendPacketEvent::new(
+                    player_entity,
+                    ServerboundMovePlayerPosRot {
+                        pos: new_pos,
+                        look_direction: LookDirection::new(new_y_rot, new_x_rot),
                         // this is always false
                         on_ground: false,
-                    }
-                    .get(),
-                });
+                    },
+                ));
             }
             ClientboundGamePacket::PlayerInfoUpdate(p) => {
                 debug!("Got player info packet {p:?}");
@@ -731,7 +736,7 @@ pub fn process_packet_events(ecs: &mut World) {
 
                 // we use RelativeEntityUpdate because it makes sure changes aren't made
                 // multiple times
-                commands.entity(entity).add(RelativeEntityUpdate {
+                commands.entity(entity).queue(RelativeEntityUpdate {
                     partial_world: instance_holder.partial_instance.clone(),
                     update: Box::new(move |entity| {
                         let entity_id = entity.id();
@@ -782,7 +787,7 @@ pub fn process_packet_events(ecs: &mut World) {
                     z: p.za as f64 / 8000.,
                 });
 
-                commands.entity(entity).add(RelativeEntityUpdate {
+                commands.entity(entity).queue(RelativeEntityUpdate {
                     partial_world: instance_holder.partial_instance.clone(),
                     update: Box::new(move |entity_mut| {
                         entity_mut.world_scope(|world| {
@@ -831,30 +836,29 @@ pub fn process_packet_events(ecs: &mut World) {
                 let (mut commands, mut query) = system_state.get_mut(ecs);
                 let (entity_id_index, instance_holder) = query.get_mut(player_entity).unwrap();
 
-                let entity = entity_id_index.get(&MinecraftEntityId(p.id));
-
-                if let Some(entity) = entity {
-                    let new_pos = p.position;
-                    let new_look_direction = LookDirection {
-                        x_rot: (p.x_rot as i32 * 360) as f32 / 256.,
-                        y_rot: (p.y_rot as i32 * 360) as f32 / 256.,
-                    };
-                    commands.entity(entity).add(RelativeEntityUpdate {
-                        partial_world: instance_holder.partial_instance.clone(),
-                        update: Box::new(move |entity| {
-                            let mut position = entity.get_mut::<Position>().unwrap();
-                            if new_pos != **position {
-                                **position = new_pos;
-                            }
-                            let mut look_direction = entity.get_mut::<LookDirection>().unwrap();
-                            if new_look_direction != *look_direction {
-                                *look_direction = new_look_direction;
-                            }
-                        }),
-                    });
-                } else {
+                let Some(entity) = entity_id_index.get(&MinecraftEntityId(p.id)) else {
                     warn!("Got teleport entity packet for unknown entity id {}", p.id);
-                }
+                    continue;
+                };
+
+                let new_pos = p.change.pos;
+                let new_look_direction = LookDirection {
+                    x_rot: (p.change.look_direction.x_rot as i32 * 360) as f32 / 256.,
+                    y_rot: (p.change.look_direction.y_rot as i32 * 360) as f32 / 256.,
+                };
+                commands.entity(entity).queue(RelativeEntityUpdate {
+                    partial_world: instance_holder.partial_instance.clone(),
+                    update: Box::new(move |entity| {
+                        let mut position = entity.get_mut::<Position>().unwrap();
+                        if new_pos != **position {
+                            **position = new_pos;
+                        }
+                        let mut look_direction = entity.get_mut::<LookDirection>().unwrap();
+                        if new_look_direction != *look_direction {
+                            *look_direction = new_look_direction;
+                        }
+                    }),
+                });
 
                 system_state.apply(ecs);
             }
@@ -872,26 +876,36 @@ pub fn process_packet_events(ecs: &mut World) {
                 let (mut commands, mut query) = system_state.get_mut(ecs);
                 let (entity_id_index, instance_holder) = query.get_mut(player_entity).unwrap();
 
-                let entity = entity_id_index.get(&MinecraftEntityId(p.entity_id));
+                debug!("Got move entity pos packet {p:?}");
 
-                if let Some(entity) = entity {
-                    let delta = p.delta.clone();
-                    commands.entity(entity).add(RelativeEntityUpdate {
-                        partial_world: instance_holder.partial_instance.clone(),
-                        update: Box::new(move |entity_mut| {
-                            let mut position = entity_mut.get_mut::<Position>().unwrap();
-                            let new_pos = position.with_delta(&delta);
-                            if new_pos != **position {
-                                **position = new_pos;
-                            }
-                        }),
-                    });
-                } else {
+                let Some(entity) = entity_id_index.get(&MinecraftEntityId(p.entity_id)) else {
                     warn!(
                         "Got move entity pos packet for unknown entity id {}",
                         p.entity_id
                     );
-                }
+                    continue;
+                };
+
+                let new_delta = p.delta.clone();
+                let new_on_ground = p.on_ground;
+                commands.entity(entity).queue(RelativeEntityUpdate {
+                    partial_world: instance_holder.partial_instance.clone(),
+                    update: Box::new(move |entity_mut| {
+                        let mut physics = entity_mut.get_mut::<Physics>().unwrap();
+                        let new_pos = physics.vec_delta_codec.decode(
+                            new_delta.xa as i64,
+                            new_delta.ya as i64,
+                            new_delta.za as i64,
+                        );
+                        physics.vec_delta_codec.set_base(new_pos);
+                        physics.set_on_ground(new_on_ground);
+
+                        let mut position = entity_mut.get_mut::<Position>().unwrap();
+                        if new_pos != **position {
+                            **position = new_pos;
+                        }
+                    }),
+                });
 
                 system_state.apply(ecs);
             }
@@ -903,23 +917,36 @@ pub fn process_packet_events(ecs: &mut World) {
                 let (mut commands, mut query) = system_state.get_mut(ecs);
                 let (entity_id_index, instance_holder) = query.get_mut(player_entity).unwrap();
 
+                debug!("Got move entity pos rot packet {p:?}");
+
                 let entity = entity_id_index.get(&MinecraftEntityId(p.entity_id));
 
                 if let Some(entity) = entity {
-                    let delta = p.delta.clone();
+                    let new_delta = p.delta.clone();
                     let new_look_direction = LookDirection {
                         x_rot: (p.x_rot as i32 * 360) as f32 / 256.,
                         y_rot: (p.y_rot as i32 * 360) as f32 / 256.,
                     };
 
-                    commands.entity(entity).add(RelativeEntityUpdate {
+                    let new_on_ground = p.on_ground;
+
+                    commands.entity(entity).queue(RelativeEntityUpdate {
                         partial_world: instance_holder.partial_instance.clone(),
                         update: Box::new(move |entity_mut| {
+                            let mut physics = entity_mut.get_mut::<Physics>().unwrap();
+                            let new_pos = physics.vec_delta_codec.decode(
+                                new_delta.xa as i64,
+                                new_delta.ya as i64,
+                                new_delta.za as i64,
+                            );
+                            physics.vec_delta_codec.set_base(new_pos);
+                            physics.set_on_ground(new_on_ground);
+
                             let mut position = entity_mut.get_mut::<Position>().unwrap();
-                            let new_pos = position.with_delta(&delta);
                             if new_pos != **position {
                                 **position = new_pos;
                             }
+
                             let mut look_direction = entity_mut.get_mut::<LookDirection>().unwrap();
                             if new_look_direction != *look_direction {
                                 *look_direction = new_look_direction;
@@ -951,10 +978,14 @@ pub fn process_packet_events(ecs: &mut World) {
                         x_rot: (p.x_rot as i32 * 360) as f32 / 256.,
                         y_rot: (p.y_rot as i32 * 360) as f32 / 256.,
                     };
+                    let new_on_ground = p.on_ground;
 
-                    commands.entity(entity).add(RelativeEntityUpdate {
+                    commands.entity(entity).queue(RelativeEntityUpdate {
                         partial_world: instance_holder.partial_instance.clone(),
                         update: Box::new(move |entity_mut| {
+                            let mut physics = entity_mut.get_mut::<Physics>().unwrap();
+                            physics.set_on_ground(new_on_ground);
+
                             let mut look_direction = entity_mut.get_mut::<LookDirection>().unwrap();
                             if new_look_direction != *look_direction {
                                 *look_direction = new_look_direction;
@@ -983,10 +1014,10 @@ pub fn process_packet_events(ecs: &mut World) {
                     entity: player_entity,
                     id: p.id,
                 });
-                send_packet_events.send(SendPacketEvent {
-                    entity: player_entity,
-                    packet: ServerboundKeepAlivePacket { id: p.id }.get(),
-                });
+                send_packet_events.send(SendPacketEvent::new(
+                    player_entity,
+                    ServerboundKeepAlive { id: p.id },
+                ));
             }
             ClientboundGamePacket::RemoveEntities(p) => {
                 debug!("Got remove entities packet {:?}", p);
@@ -1096,7 +1127,7 @@ pub fn process_packet_events(ecs: &mut World) {
                 }
             }
             ClientboundGamePacket::GameEvent(p) => {
-                use azalea_protocol::packets::game::clientbound_game_event_packet::EventType;
+                use azalea_protocol::packets::game::c_game_event::EventType;
 
                 debug!("Got game event packet {p:?}");
 
@@ -1158,7 +1189,7 @@ pub fn process_packet_events(ecs: &mut World) {
                     events.send(SetContainerContentEvent {
                         entity: player_entity,
                         slots: p.items.clone(),
-                        container_id: p.container_id as u8,
+                        container_id: p.container_id,
                     });
                 }
             }
@@ -1202,7 +1233,7 @@ pub fn process_packet_events(ecs: &mut World) {
                         if let Some(slot) = inventory.inventory_menu.slot_mut(p.slot.into()) {
                             *slot = p.item_stack.clone();
                         }
-                    } else if p.container_id == (inventory.id as i8)
+                    } else if p.container_id == inventory.id
                         && (p.container_id != 0 || !is_creative_mode_and_inventory_closed)
                     {
                         // var2.containerMenu.setItem(var4, var1.getStateId(), var3);
@@ -1227,20 +1258,18 @@ pub fn process_packet_events(ecs: &mut World) {
             ClientboundGamePacket::DeleteChat(_) => {}
             ClientboundGamePacket::Explode(p) => {
                 trace!("Got explode packet {p:?}");
-                let mut system_state: SystemState<EventWriter<KnockbackEvent>> =
-                    SystemState::new(ecs);
-                let mut knockback_events = system_state.get_mut(ecs);
+                if let Some(knockback) = p.knockback {
+                    let mut system_state: SystemState<EventWriter<KnockbackEvent>> =
+                        SystemState::new(ecs);
+                    let mut knockback_events = system_state.get_mut(ecs);
 
-                knockback_events.send(KnockbackEvent {
-                    entity: player_entity,
-                    knockback: KnockbackType::Set(Vec3 {
-                        x: p.knockback_x as f64,
-                        y: p.knockback_y as f64,
-                        z: p.knockback_z as f64,
-                    }),
-                });
+                    knockback_events.send(KnockbackEvent {
+                        entity: player_entity,
+                        knockback: KnockbackType::Set(knockback),
+                    });
 
-                system_state.apply(ecs);
+                    system_state.apply(ecs);
+                }
             }
             ClientboundGamePacket::ForgetLevelChunk(p) => {
                 debug!("Got forget level chunk packet {p:?}");
@@ -1279,10 +1308,10 @@ pub fn process_packet_events(ecs: &mut World) {
                     SystemState::new(ecs);
                 let mut send_packet_events = system_state.get_mut(ecs);
 
-                send_packet_events.send(SendPacketEvent {
-                    entity: player_entity,
-                    packet: ServerboundPongPacket { id: p.id }.get(),
-                });
+                send_packet_events.send(SendPacketEvent::new(
+                    player_entity,
+                    ServerboundPong { id: p.id },
+                ));
             }
             ClientboundGamePacket::PlaceGhostRecipe(_) => {}
             ClientboundGamePacket::PlayerCombatEnd(_) => {}
@@ -1418,20 +1447,66 @@ pub fn process_packet_events(ecs: &mut World) {
                 system_state.apply(ecs);
             }
 
-            ClientboundGamePacket::StartConfiguration(_) => {
+            ClientboundGamePacket::StartConfiguration(_p) => {
                 let mut system_state: SystemState<(Commands, EventWriter<SendPacketEvent>)> =
                     SystemState::new(ecs);
                 let (mut commands, mut packet_events) = system_state.get_mut(ecs);
 
-                packet_events.send(SendPacketEvent {
-                    entity: player_entity,
-                    packet: ServerboundConfigurationAcknowledgedPacket {}.get(),
-                });
+                packet_events.send(SendPacketEvent::new(
+                    player_entity,
+                    ServerboundConfigurationAcknowledged {},
+                ));
 
                 commands
                     .entity(player_entity)
                     .insert(crate::client::InConfigurationState)
                     .remove::<crate::JoinedClientBundle>();
+
+                system_state.apply(ecs);
+            }
+
+            ClientboundGamePacket::EntityPositionSync(p) => {
+                let mut system_state: SystemState<(
+                    Commands,
+                    Query<(&EntityIdIndex, &InstanceHolder)>,
+                )> = SystemState::new(ecs);
+                let (mut commands, mut query) = system_state.get_mut(ecs);
+                let (entity_id_index, instance_holder) = query.get_mut(player_entity).unwrap();
+
+                let Some(entity) = entity_id_index.get(&MinecraftEntityId(p.id)) else {
+                    warn!("Got teleport entity packet for unknown entity id {}", p.id);
+                    continue;
+                };
+
+                let new_position = p.values.pos;
+                let new_on_ground = p.on_ground;
+                let new_look_direction = p.values.look_direction;
+
+                commands.entity(entity).queue(RelativeEntityUpdate {
+                    partial_world: instance_holder.partial_instance.clone(),
+                    update: Box::new(move |entity_mut| {
+                        let is_local_entity = entity_mut.get::<LocalEntity>().is_some();
+                        let mut physics = entity_mut.get_mut::<Physics>().unwrap();
+
+                        physics.vec_delta_codec.set_base(new_position);
+
+                        if is_local_entity {
+                            debug!("Ignoring entity position sync packet for local player");
+                            return;
+                        }
+
+                        physics.set_on_ground(new_on_ground);
+
+                        let mut last_sent_position =
+                            entity_mut.get_mut::<LastSentPosition>().unwrap();
+                        **last_sent_position = new_position;
+                        let mut position = entity_mut.get_mut::<Position>().unwrap();
+                        **position = new_position;
+
+                        let mut look_direction = entity_mut.get_mut::<LookDirection>().unwrap();
+                        *look_direction = new_look_direction;
+                    }),
+                });
 
                 system_state.apply(ecs);
             }
@@ -1459,7 +1534,7 @@ pub fn process_packet_events(ecs: &mut World) {
             ClientboundGamePacket::TabList(_) => {}
             ClientboundGamePacket::TagQuery(_) => {}
             ClientboundGamePacket::TakeItemEntity(_) => {}
-            ClientboundGamePacket::Bundle(_) => {}
+            ClientboundGamePacket::BundleDelimiter(_) => {}
             ClientboundGamePacket::DamageEvent(_) => {}
             ClientboundGamePacket::HurtAnimation(_) => {}
 
@@ -1472,13 +1547,12 @@ pub fn process_packet_events(ecs: &mut World) {
             ClientboundGamePacket::PongResponse(_) => {}
             ClientboundGamePacket::StoreCookie(_) => {}
             ClientboundGamePacket::Transfer(_) => {}
-            ClientboundGamePacket::MoveMinecart(_) => {}
+            ClientboundGamePacket::MoveMinecartAlongTrack(_) => {}
             ClientboundGamePacket::SetHeldSlot(_) => {}
             ClientboundGamePacket::SetPlayerInventory(_) => {}
             ClientboundGamePacket::ProjectilePower(_) => {}
             ClientboundGamePacket::CustomReportDetails(_) => {}
             ClientboundGamePacket::ServerLinks(_) => {}
-            ClientboundGamePacket::EntityPositionSync(_) => {}
             ClientboundGamePacket::PlayerRotation(_) => {}
             ClientboundGamePacket::RecipeBookAdd(_) => {}
             ClientboundGamePacket::RecipeBookRemove(_) => {}
@@ -1490,8 +1564,14 @@ pub fn process_packet_events(ecs: &mut World) {
 /// An event for sending a packet to the server while we're in the `game` state.
 #[derive(Event)]
 pub struct SendPacketEvent {
-    pub entity: Entity,
+    pub sent_by: Entity,
     pub packet: ServerboundGamePacket,
+}
+impl SendPacketEvent {
+    pub fn new(sent_by: Entity, packet: impl Packet<ServerboundGamePacket>) -> Self {
+        let packet = packet.into_variant();
+        Self { sent_by, packet }
+    }
 }
 
 pub fn handle_send_packet_event(
@@ -1499,7 +1579,7 @@ pub fn handle_send_packet_event(
     mut query: Query<&mut RawConnection>,
 ) {
     for event in send_packet_events.read() {
-        if let Ok(raw_connection) = query.get_mut(event.entity) {
+        if let Ok(raw_connection) = query.get_mut(event.sent_by) {
             // debug!("Sending packet: {:?}", event.packet);
             if let Err(e) = raw_connection.write_packet(event.packet.clone()) {
                 error!("Failed to send packet: {e}");

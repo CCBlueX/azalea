@@ -100,7 +100,7 @@ fn travel(
         let block_below: Box<dyn Block> = block_state_below.into();
         let block_friction = block_below.behavior().friction;
 
-        let inertia = if physics.on_ground {
+        let inertia = if physics.on_ground() {
             block_friction * 0.91
         } else {
             0.91
@@ -178,7 +178,7 @@ pub fn ai_step(
             if **jumping {
                 // TODO: jumping in liquids and jump delay
 
-                if physics.on_ground {
+                if physics.on_ground() {
                     jump_from_ground(
                         &mut physics,
                         position,
@@ -358,7 +358,7 @@ fn get_friction_influenced_speed(
     is_sprinting: bool,
 ) -> f32 {
     // TODO: have speed & flying_speed fields in entity
-    if physics.on_ground {
+    if physics.on_ground() {
         let speed: f32 = attributes.speed.calculate() as f32;
         speed * (0.216f32 / (friction * friction * friction))
     } else {
@@ -440,7 +440,7 @@ mod tests {
     #[test]
     fn test_gravity() {
         let mut app = make_test_app();
-        let world_lock = app.world.resource_mut::<InstanceContainer>().insert(
+        let world_lock = app.world_mut().resource_mut::<InstanceContainer>().insert(
             ResourceLocation::new("minecraft:overworld"),
             384,
             -64,
@@ -454,7 +454,7 @@ mod tests {
         );
 
         let entity = app
-            .world
+            .world_mut()
             .spawn((
                 EntityBundle::new(
                     Uuid::nil(),
@@ -471,24 +471,24 @@ mod tests {
             ))
             .id();
         {
-            let entity_pos = *app.world.get::<Position>(entity).unwrap();
+            let entity_pos = *app.world_mut().get::<Position>(entity).unwrap();
             // y should start at 70
             assert_eq!(entity_pos.y, 70.);
         }
         app.update();
-        app.world.run_schedule(GameTick);
+        app.world_mut().run_schedule(GameTick);
         app.update();
         {
-            let entity_pos = *app.world.get::<Position>(entity).unwrap();
+            let entity_pos = *app.world_mut().get::<Position>(entity).unwrap();
             // delta is applied before gravity, so the first tick only sets the delta
             assert_eq!(entity_pos.y, 70.);
-            let entity_physics = app.world.get::<Physics>(entity).unwrap();
+            let entity_physics = app.world_mut().get::<Physics>(entity).unwrap();
             assert!(entity_physics.velocity.y < 0.);
         }
-        app.world.run_schedule(GameTick);
+        app.world_mut().run_schedule(GameTick);
         app.update();
         {
-            let entity_pos = *app.world.get::<Position>(entity).unwrap();
+            let entity_pos = *app.world_mut().get::<Position>(entity).unwrap();
             // the second tick applies the delta to the position, so now it should go down
             assert!(
                 entity_pos.y < 70.,
@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn test_collision() {
         let mut app = make_test_app();
-        let world_lock = app.world.resource_mut::<InstanceContainer>().insert(
+        let world_lock = app.world_mut().resource_mut::<InstanceContainer>().insert(
             ResourceLocation::new("minecraft:overworld"),
             384,
             -64,
@@ -513,7 +513,7 @@ mod tests {
             &mut world_lock.write().chunks,
         );
         let entity = app
-            .world
+            .world_mut()
             .spawn((
                 EntityBundle::new(
                     Uuid::nil(),
@@ -539,19 +539,19 @@ mod tests {
             "Block state should exist, if this fails that means the chunk wasn't loaded and the block didn't get placed"
         );
         app.update();
-        app.world.run_schedule(GameTick);
+        app.world_mut().run_schedule(GameTick);
         app.update();
         {
-            let entity_pos = *app.world.get::<Position>(entity).unwrap();
+            let entity_pos = *app.world_mut().get::<Position>(entity).unwrap();
             // delta will change, but it won't move until next tick
             assert_eq!(entity_pos.y, 70.);
-            let entity_physics = app.world.get::<Physics>(entity).unwrap();
+            let entity_physics = app.world_mut().get::<Physics>(entity).unwrap();
             assert!(entity_physics.velocity.y < 0.);
         }
-        app.world.run_schedule(GameTick);
+        app.world_mut().run_schedule(GameTick);
         app.update();
         {
-            let entity_pos = *app.world.get::<Position>(entity).unwrap();
+            let entity_pos = *app.world_mut().get::<Position>(entity).unwrap();
             // the second tick applies the delta to the position, but it also does collision
             assert_eq!(entity_pos.y, 70.);
         }
@@ -560,7 +560,7 @@ mod tests {
     #[test]
     fn test_slab_collision() {
         let mut app = make_test_app();
-        let world_lock = app.world.resource_mut::<InstanceContainer>().insert(
+        let world_lock = app.world_mut().resource_mut::<InstanceContainer>().insert(
             ResourceLocation::new("minecraft:overworld"),
             384,
             -64,
@@ -573,7 +573,7 @@ mod tests {
             &mut world_lock.write().chunks,
         );
         let entity = app
-            .world
+            .world_mut()
             .spawn((
                 EntityBundle::new(
                     Uuid::nil(),
@@ -604,17 +604,17 @@ mod tests {
         );
         // do a few steps so we fall on the slab
         for _ in 0..20 {
-            app.world.run_schedule(GameTick);
+            app.world_mut().run_schedule(GameTick);
             app.update();
         }
-        let entity_pos = app.world.get::<Position>(entity).unwrap();
+        let entity_pos = app.world_mut().get::<Position>(entity).unwrap();
         assert_eq!(entity_pos.y, 69.5);
     }
 
     #[test]
     fn test_top_slab_collision() {
         let mut app = make_test_app();
-        let world_lock = app.world.resource_mut::<InstanceContainer>().insert(
+        let world_lock = app.world_mut().resource_mut::<InstanceContainer>().insert(
             ResourceLocation::new("minecraft:overworld"),
             384,
             -64,
@@ -627,7 +627,7 @@ mod tests {
             &mut world_lock.write().chunks,
         );
         let entity = app
-            .world
+            .world_mut()
             .spawn((
                 EntityBundle::new(
                     Uuid::nil(),
@@ -657,17 +657,17 @@ mod tests {
         );
         // do a few steps so we fall on the slab
         for _ in 0..20 {
-            app.world.run_schedule(GameTick);
+            app.world_mut().run_schedule(GameTick);
             app.update();
         }
-        let entity_pos = app.world.get::<Position>(entity).unwrap();
+        let entity_pos = app.world_mut().get::<Position>(entity).unwrap();
         assert_eq!(entity_pos.y, 70.);
     }
 
     #[test]
     fn test_weird_wall_collision() {
         let mut app = make_test_app();
-        let world_lock = app.world.resource_mut::<InstanceContainer>().insert(
+        let world_lock = app.world_mut().resource_mut::<InstanceContainer>().insert(
             ResourceLocation::new("minecraft:overworld"),
             384,
             -64,
@@ -680,7 +680,7 @@ mod tests {
             &mut world_lock.write().chunks,
         );
         let entity = app
-            .world
+            .world_mut()
             .spawn((
                 EntityBundle::new(
                     Uuid::nil(),
@@ -699,10 +699,10 @@ mod tests {
         let block_state = world_lock.write().chunks.set_block_state(
             &BlockPos { x: 0, y: 69, z: 0 },
             azalea_block::blocks::CobblestoneWall {
-                east: azalea_block::properties::EastWall::Low,
-                north: azalea_block::properties::NorthWall::Low,
-                south: azalea_block::properties::SouthWall::Low,
-                west: azalea_block::properties::WestWall::Low,
+                east: azalea_block::properties::WallEast::Low,
+                north: azalea_block::properties::WallNorth::Low,
+                south: azalea_block::properties::WallSouth::Low,
+                west: azalea_block::properties::WallWest::Low,
                 up: false,
                 waterlogged: false,
             }
@@ -714,18 +714,18 @@ mod tests {
         );
         // do a few steps so we fall on the wall
         for _ in 0..20 {
-            app.world.run_schedule(GameTick);
+            app.world_mut().run_schedule(GameTick);
             app.update();
         }
 
-        let entity_pos = app.world.get::<Position>(entity).unwrap();
+        let entity_pos = app.world_mut().get::<Position>(entity).unwrap();
         assert_eq!(entity_pos.y, 70.5);
     }
 
     #[test]
     fn test_negative_coordinates_weird_wall_collision() {
         let mut app = make_test_app();
-        let world_lock = app.world.resource_mut::<InstanceContainer>().insert(
+        let world_lock = app.world_mut().resource_mut::<InstanceContainer>().insert(
             ResourceLocation::new("minecraft:overworld"),
             384,
             -64,
@@ -738,7 +738,7 @@ mod tests {
             &mut world_lock.write().chunks,
         );
         let entity = app
-            .world
+            .world_mut()
             .spawn((
                 EntityBundle::new(
                     Uuid::nil(),
@@ -761,10 +761,10 @@ mod tests {
                 z: -8,
             },
             azalea_block::blocks::CobblestoneWall {
-                east: azalea_block::properties::EastWall::Low,
-                north: azalea_block::properties::NorthWall::Low,
-                south: azalea_block::properties::SouthWall::Low,
-                west: azalea_block::properties::WestWall::Low,
+                east: azalea_block::properties::WallEast::Low,
+                north: azalea_block::properties::WallNorth::Low,
+                south: azalea_block::properties::WallSouth::Low,
+                west: azalea_block::properties::WallWest::Low,
                 up: false,
                 waterlogged: false,
             }
@@ -776,11 +776,11 @@ mod tests {
         );
         // do a few steps so we fall on the wall
         for _ in 0..20 {
-            app.world.run_schedule(GameTick);
+            app.world_mut().run_schedule(GameTick);
             app.update();
         }
 
-        let entity_pos = app.world.get::<Position>(entity).unwrap();
+        let entity_pos = app.world_mut().get::<Position>(entity).unwrap();
         assert_eq!(entity_pos.y, 70.5);
     }
 }

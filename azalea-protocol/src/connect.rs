@@ -8,7 +8,6 @@ use std::net::SocketAddr;
 use azalea_auth::game_profile::GameProfile;
 use azalea_auth::sessionserver::{ClientSessionServerError, ServerSessionServerError};
 use azalea_crypto::{Aes128CfbDec, Aes128CfbEnc};
-use bytes::BytesMut;
 use thiserror::Error;
 use tokio::io::{AsyncWriteExt, BufStream};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf, ReuniteError};
@@ -16,12 +15,10 @@ use tokio::net::TcpStream;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use crate::packets::configuration::{
-    ClientboundConfigurationPacket, ServerboundConfigurationPacket,
-};
+use crate::packets::config::{ClientboundConfigPacket, ServerboundConfigPacket};
 use crate::packets::game::{ClientboundGamePacket, ServerboundGamePacket};
-use crate::packets::handshaking::{ClientboundHandshakePacket, ServerboundHandshakePacket};
-use crate::packets::login::clientbound_hello_packet::ClientboundHelloPacket;
+use crate::packets::handshake::{ClientboundHandshakePacket, ServerboundHandshakePacket};
+use crate::packets::login::c_hello::ClientboundHello;
 use crate::packets::login::{ClientboundLoginPacket, ServerboundLoginPacket};
 use crate::packets::status::{ClientboundStatusPacket, ServerboundStatusPacket};
 use crate::packets::ProtocolPacket;
@@ -30,7 +27,7 @@ use crate::write::{serialize_packet, write_raw_packet};
 
 pub struct RawReadConnection {
     pub read_stream: OwnedReadHalf,
-    pub buffer: BytesMut,
+    pub buffer: Cursor<Vec<u8>>,
     pub compression_threshold: Option<u32>,
     pub dec_cipher: Option<Aes128CfbDec>,
 }
@@ -63,13 +60,14 @@ pub struct WriteConnection<W: ProtocolPacket> {
 ///     resolver,
 ///     connect::Connection,
 ///     packets::{
+///         self,
 ///         ClientIntention, PROTOCOL_VERSION,
 ///         login::{
 ///             ClientboundLoginPacket,
-///             serverbound_hello_packet::ServerboundHelloPacket,
-///             serverbound_key_packet::ServerboundKeyPacket
+///             ServerboundHello,
+///             ServerboundKey
 ///         },
-///         handshaking::client_intention_packet::ClientIntentionPacket
+///         handshake::ServerboundIntention
 ///     }
 /// };
 ///
@@ -79,28 +77,20 @@ pub struct WriteConnection<W: ProtocolPacket> {
 ///     let mut conn = Connection::new(&resolved_address).await?;
 ///
 ///     // handshake
-///     conn.write(
-///         ClientIntentionPacket {
-///             protocol_version: PROTOCOL_VERSION,
-///             hostname: resolved_address.ip().to_string(),
-///             port: resolved_address.port(),
-///             intention: ClientIntention::Login,
-///         }
-///         .get(),
-///     )
-///     .await?;
+///     conn.write(ServerboundIntention {
+///         protocol_version: PROTOCOL_VERSION,
+///         hostname: resolved_address.ip().to_string(),
+///         port: resolved_address.port(),
+///         intention: ClientIntention::Login,
+///     }).await?;
 ///
 ///     let mut conn = conn.login();
 ///
 ///     // login
-///     conn.write(
-///         ServerboundHelloPacket {
-///             name: "bot".to_string(),
-///             profile_id: uuid::Uuid::nil(),
-///         }
-///         .get(),
-///     )
-///     .await?;
+///     conn.write(ServerboundHello {
+///         name: "bot".to_string(),
+///         profile_id: uuid::Uuid::nil(),
+///     }).await?;
 ///
 ///     let (conn, game_profile) = loop {
 ///         let packet = conn.read().await?;
@@ -108,14 +98,10 @@ pub struct WriteConnection<W: ProtocolPacket> {
 ///             ClientboundLoginPacket::Hello(p) => {
 ///                 let e = azalea_crypto::encrypt(&p.public_key, &p.challenge).unwrap();
 ///
-///                 conn.write(
-///                     ServerboundKeyPacket {
-///                         key_bytes: e.encrypted_public_key,
-///                         encrypted_challenge: e.encrypted_challenge,
-///                     }
-///                     .get(),
-///                 )
-///                 .await?;
+///                 conn.write(ServerboundKey {
+///                     key_bytes: e.encrypted_public_key,
+///                     encrypted_challenge: e.encrypted_challenge,
+///                 }).await?;
 ///                 conn.set_encryption_key(e.secret_key);
 ///             }
 ///             ClientboundLoginPacket::LoginCompression(p) => {
@@ -129,7 +115,13 @@ pub struct WriteConnection<W: ProtocolPacket> {
 ///                 return Err("login disconnect".into());
 ///             }
 ///             ClientboundLoginPacket::CustomQuery(p) => {}
-///             ClientboundLoginPacket::CookieRequest(_) => {}
+///             ClientboundLoginPacket::CookieRequest(p) => {
+///                 conn.write(packets::login::ServerboundCookieResponse {
+///                     key: p.key,
+///                     payload: None,
+///                 })
+///                 .await?;
+///             }
 ///         }
 ///     };
 ///
@@ -142,7 +134,7 @@ pub struct Connection<R: ProtocolPacket, W: ProtocolPacket> {
 }
 
 impl RawReadConnection {
-    pub async fn read(&mut self) -> Result<Vec<u8>, Box<ReadPacketError>> {
+    pub async fn read(&mut self) -> Result<Box<[u8]>, Box<ReadPacketError>> {
         read_raw_packet::<_>(
             &mut self.read_stream,
             &mut self.buffer,
@@ -152,7 +144,7 @@ impl RawReadConnection {
         .await
     }
 
-    pub fn try_read(&mut self) -> Result<Option<Vec<u8>>, Box<ReadPacketError>> {
+    pub fn try_read(&mut self) -> Result<Option<Box<[u8]>>, Box<ReadPacketError>> {
         try_read_raw_packet::<_>(
             &mut self.read_stream,
             &mut self.buffer,
@@ -197,7 +189,7 @@ where
     /// Read a packet from the stream.
     pub async fn read(&mut self) -> Result<R, Box<ReadPacketError>> {
         let raw_packet = self.raw.read().await?;
-        deserialize_packet(&mut Cursor::new(raw_packet.as_slice()))
+        deserialize_packet(&mut Cursor::new(&raw_packet))
     }
 
     /// Try to read a packet from the stream, or return Ok(None) if there's no
@@ -206,9 +198,7 @@ where
         let Some(raw_packet) = self.raw.try_read()? else {
             return Ok(None);
         };
-        Ok(Some(deserialize_packet(&mut Cursor::new(
-            raw_packet.as_slice(),
-        ))?))
+        Ok(Some(deserialize_packet(&mut Cursor::new(&raw_packet))?))
     }
 }
 impl<W> WriteConnection<W>
@@ -243,7 +233,8 @@ where
     }
 
     /// Write a packet to the other side of the connection.
-    pub async fn write(&mut self, packet: W) -> std::io::Result<()> {
+    pub async fn write(&mut self, packet: impl crate::packets::Packet<W>) -> std::io::Result<()> {
+        let packet = packet.into_variant();
         self.writer.write(packet).await
     }
 
@@ -310,7 +301,7 @@ impl Connection<ClientboundHandshakePacket, ServerboundHandshakePacket> {
             reader: ReadConnection {
                 raw: RawReadConnection {
                     read_stream,
-                    buffer: BytesMut::new(),
+                    buffer: Cursor::new(Vec::new()),
                     compression_threshold: None,
                     dec_cipher: None,
                 },
@@ -368,9 +359,7 @@ impl Connection<ClientboundLoginPacket, ServerboundLoginPacket> {
     /// Change our state from login to configuration. This is the state where
     /// the server sends us the registries and resource pack and stuff.
     #[must_use]
-    pub fn configuration(
-        self,
-    ) -> Connection<ClientboundConfigurationPacket, ServerboundConfigurationPacket> {
+    pub fn configuration(self) -> Connection<ClientboundConfigPacket, ServerboundConfigPacket> {
         Connection::from(self)
     }
 
@@ -385,7 +374,7 @@ impl Connection<ClientboundLoginPacket, ServerboundLoginPacket> {
     /// use azalea_protocol::connect::Connection;
     /// use azalea_protocol::packets::login::{
     ///     ClientboundLoginPacket,
-    ///     serverbound_key_packet::ServerboundKeyPacket
+    ///     ServerboundKey
     /// };
     /// use uuid::Uuid;
     /// # use azalea_protocol::ServerAddress;
@@ -414,12 +403,10 @@ impl Connection<ClientboundLoginPacket, ServerboundLoginPacket> {
     ///             e.secret_key,
     ///             &p
     ///         ).await?;
-    ///         conn.write(
-    ///             ServerboundKeyPacket {
-    ///                 key_bytes: e.encrypted_public_key,
-    ///                 encrypted_challenge: e.encrypted_challenge,
-    ///             }.get()
-    ///         ).await?;
+    ///         conn.write(ServerboundKey {
+    ///             key_bytes: e.encrypted_public_key,
+    ///             encrypted_challenge: e.encrypted_challenge,
+    ///         }).await?;
     ///         conn.set_encryption_key(e.secret_key);
     ///     }
     ///     _ => {}
@@ -432,7 +419,7 @@ impl Connection<ClientboundLoginPacket, ServerboundLoginPacket> {
         access_token: &str,
         uuid: &Uuid,
         private_key: [u8; 16],
-        packet: &ClientboundHelloPacket,
+        packet: &ClientboundHello,
     ) -> Result<(), ClientSessionServerError> {
         azalea_auth::sessionserver::join(
             access_token,
@@ -506,14 +493,12 @@ impl Connection<ServerboundLoginPacket, ClientboundLoginPacket> {
 
     /// Change our state back to configuration.
     #[must_use]
-    pub fn configuration(
-        self,
-    ) -> Connection<ServerboundConfigurationPacket, ClientboundConfigurationPacket> {
+    pub fn configuration(self) -> Connection<ServerboundConfigPacket, ClientboundConfigPacket> {
         Connection::from(self)
     }
 }
 
-impl Connection<ServerboundConfigurationPacket, ClientboundConfigurationPacket> {
+impl Connection<ServerboundConfigPacket, ClientboundConfigPacket> {
     /// Change our state from configuration to game. This is the state that's
     /// used when the client is actually in the world.
     #[must_use]
@@ -522,7 +507,7 @@ impl Connection<ServerboundConfigurationPacket, ClientboundConfigurationPacket> 
     }
 }
 
-impl Connection<ClientboundConfigurationPacket, ServerboundConfigurationPacket> {
+impl Connection<ClientboundConfigPacket, ServerboundConfigPacket> {
     /// Change our state from configuration to game. This is the state that's
     /// used when the client is actually in the world.
     #[must_use]
@@ -534,9 +519,7 @@ impl Connection<ClientboundConfigurationPacket, ServerboundConfigurationPacket> 
 impl Connection<ClientboundGamePacket, ServerboundGamePacket> {
     /// Change our state back to configuration.
     #[must_use]
-    pub fn configuration(
-        self,
-    ) -> Connection<ClientboundConfigurationPacket, ServerboundConfigurationPacket> {
+    pub fn configuration(self) -> Connection<ClientboundConfigPacket, ServerboundConfigPacket> {
         Connection::from(self)
     }
 }
@@ -576,7 +559,7 @@ where
             reader: ReadConnection {
                 raw: RawReadConnection {
                     read_stream,
-                    buffer: BytesMut::new(),
+                    buffer: Cursor::new(Vec::new()),
                     compression_threshold: None,
                     dec_cipher: None,
                 },

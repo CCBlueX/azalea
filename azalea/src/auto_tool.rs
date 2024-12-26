@@ -1,8 +1,8 @@
 use azalea_block::{Block, BlockState};
 use azalea_client::{inventory::Inventory, Client};
 use azalea_entity::{FluidOnEyes, Physics};
-use azalea_inventory::{ItemSlot, Menu};
-use azalea_registry::{DataComponentKind, Fluid};
+use azalea_inventory::{components, ItemStack, Menu};
+use azalea_registry::Fluid;
 
 #[derive(Debug)]
 pub struct BestToolResult {
@@ -31,24 +31,10 @@ impl AutoToolClientExt for Client {
 /// or in water, use [`accurate_best_tool_in_hotbar_for_block`] instead if you
 /// care about those things.
 pub fn best_tool_in_hotbar_for_block(block: BlockState, menu: &Menu) -> BestToolResult {
-    accurate_best_tool_in_hotbar_for_block(
-        block,
-        menu,
-        &Physics {
-            on_ground: true,
-            velocity: Default::default(),
-            xxa: Default::default(),
-            yya: Default::default(),
-            zza: Default::default(),
-            last_on_ground: Default::default(),
-            dimensions: Default::default(),
-            bounding_box: Default::default(),
-            has_impulse: Default::default(),
-            horizontal_collision: Default::default(),
-            vertical_collision: Default::default(),
-        },
-        &FluidOnEyes::new(Fluid::Empty),
-    )
+    let mut physics = Physics::default();
+    physics.set_on_ground(true);
+
+    accurate_best_tool_in_hotbar_for_block(block, menu, &physics, &FluidOnEyes::new(Fluid::Empty))
 }
 
 pub fn accurate_best_tool_in_hotbar_for_block(
@@ -80,7 +66,7 @@ pub fn accurate_best_tool_in_hotbar_for_block(
     for (i, item_slot) in hotbar_slots.iter().enumerate() {
         let this_item_speed;
         match item_slot {
-            ItemSlot::Empty => {
+            ItemStack::Empty => {
                 this_item_speed = Some(azalea_entity::mining::get_mine_progress(
                     block.as_ref(),
                     azalea_registry::Item::Air,
@@ -89,17 +75,13 @@ pub fn accurate_best_tool_in_hotbar_for_block(
                     physics,
                 ));
             }
-            ItemSlot::Present(item_slot) => {
+            ItemStack::Present(item_stack) => {
                 // lazy way to avoid checking durability since azalea doesn't have durability
                 // data yet
-                if item_slot
-                    .components
-                    .get(DataComponentKind::Damage)
-                    .is_none()
-                {
+                if !item_stack.components.has::<components::Damage>() {
                     this_item_speed = Some(azalea_entity::mining::get_mine_progress(
                         block.as_ref(),
-                        item_slot.kind,
+                        item_stack.kind,
                         menu,
                         fluid_on_eyes,
                         physics,
@@ -119,7 +101,7 @@ pub fn accurate_best_tool_in_hotbar_for_block(
 
     // now check every item
     for (i, item_slot) in hotbar_slots.iter().enumerate() {
-        if let ItemSlot::Present(item_slot) = item_slot {
+        if let ItemStack::Present(item_slot) = item_slot {
             let this_item_speed = azalea_entity::mining::get_mine_progress(
                 block.as_ref(),
                 item_slot.kind,

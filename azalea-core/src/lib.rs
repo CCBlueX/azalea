@@ -1,11 +1,11 @@
 #![doc = include_str!("../README.md")]
 #![feature(trait_upcasting)]
 #![allow(incomplete_features)]
-#![feature(generic_const_exprs)]
 
 pub mod aabb;
 pub mod bitset;
 pub mod block_hit_result;
+pub mod color;
 pub mod cursor3d;
 pub mod delta;
 pub mod difficulty;

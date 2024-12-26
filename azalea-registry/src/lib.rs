@@ -11,11 +11,11 @@ pub mod tags;
 use std::fmt::{self, Debug};
 use std::io::{Cursor, Write};
 
-use azalea_buf::{BufReadError, McBufReadable, McBufVarReadable, McBufVarWritable, McBufWritable};
+use azalea_buf::{AzaleaRead, AzaleaReadVar, AzaleaWrite, AzaleaWriteVar, BufReadError};
 use azalea_registry_macros::registry;
 pub use extra::*;
 
-pub trait Registry: McBufReadable + McBufWritable
+pub trait Registry: AzaleaRead + AzaleaWrite
 where
     Self: Sized,
 {
@@ -26,11 +26,11 @@ where
 /// A registry that might not be present. This is transmitted as a single
 /// varint in the protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct OptionalRegistry<T: Registry>(Option<T>);
+pub struct OptionalRegistry<T: Registry>(pub Option<T>);
 
-impl<T: Registry> McBufReadable for OptionalRegistry<T> {
-    fn read_from(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
-        Ok(OptionalRegistry(match u32::var_read_from(buf)? {
+impl<T: Registry> AzaleaRead for OptionalRegistry<T> {
+    fn azalea_read(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
+        Ok(OptionalRegistry(match u32::azalea_read_var(buf)? {
             0 => None,
             value => Some(
                 T::from_u32(value - 1)
@@ -39,49 +39,49 @@ impl<T: Registry> McBufReadable for OptionalRegistry<T> {
         }))
     }
 }
-impl<T: Registry> McBufWritable for OptionalRegistry<T> {
-    fn write_into(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
+impl<T: Registry> AzaleaWrite for OptionalRegistry<T> {
+    fn azalea_write(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
         match &self.0 {
-            None => 0u32.var_write_into(buf),
-            Some(value) => (value.to_u32() + 1).var_write_into(buf),
+            None => 0u32.azalea_write_var(buf),
+            Some(value) => (value.to_u32() + 1).azalea_write_var(buf),
         }
     }
 }
 
 /// A registry that will either take an ID or a resource location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CustomRegistry<D: Registry, C: McBufReadable + McBufWritable> {
+pub enum CustomRegistry<D: Registry, C: AzaleaRead + AzaleaWrite> {
     Direct(D),
     Custom(C),
 }
 
-impl<D: Registry, C: McBufReadable + McBufWritable> McBufReadable for CustomRegistry<D, C> {
-    fn read_from(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
-        let direct_registry = OptionalRegistry::<D>::read_from(buf)?;
+impl<D: Registry, C: AzaleaRead + AzaleaWrite> AzaleaRead for CustomRegistry<D, C> {
+    fn azalea_read(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
+        let direct_registry = OptionalRegistry::<D>::azalea_read(buf)?;
         if let Some(direct_registry) = direct_registry.0 {
             return Ok(CustomRegistry::Direct(direct_registry));
         }
-        Ok(CustomRegistry::Custom(C::read_from(buf)?))
+        Ok(CustomRegistry::Custom(C::azalea_read(buf)?))
     }
 }
-impl<D: Registry, C: McBufReadable + McBufWritable> McBufWritable for CustomRegistry<D, C> {
-    fn write_into(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
+impl<D: Registry, C: AzaleaRead + AzaleaWrite> AzaleaWrite for CustomRegistry<D, C> {
+    fn azalea_write(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
         match self {
             CustomRegistry::Direct(direct_registry) => {
                 // write the id + 1
-                (direct_registry.to_u32() + 1).var_write_into(buf)
+                (direct_registry.to_u32() + 1).azalea_write_var(buf)
             }
             CustomRegistry::Custom(custom_registry) => {
                 // write 0, then the custom registry
-                0u32.var_write_into(buf)?;
-                custom_registry.write_into(buf)
+                0u32.azalea_write_var(buf)?;
+                custom_registry.azalea_write(buf)
             }
         }
     }
 }
 
 #[derive(Clone, PartialEq)]
-pub enum HolderSet<D: Registry, ResourceLocation: McBufReadable + McBufWritable> {
+pub enum HolderSet<D: Registry, ResourceLocation: AzaleaRead + AzaleaWrite> {
     Direct {
         contents: Vec<D>,
     },
@@ -91,13 +91,13 @@ pub enum HolderSet<D: Registry, ResourceLocation: McBufReadable + McBufWritable>
     },
 }
 
-impl<D: Registry, ResourceLocation: McBufReadable + McBufWritable> McBufReadable
+impl<D: Registry, ResourceLocation: AzaleaRead + AzaleaWrite> AzaleaRead
     for HolderSet<D, ResourceLocation>
 {
-    fn read_from(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
-        let size = i32::var_read_from(buf)? - 1;
+    fn azalea_read(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
+        let size = i32::azalea_read_var(buf)? - 1;
         if size == -1 {
-            let key = ResourceLocation::read_from(buf)?;
+            let key = ResourceLocation::azalea_read(buf)?;
             Ok(Self::Named {
                 key,
                 contents: Vec::new(),
@@ -105,32 +105,32 @@ impl<D: Registry, ResourceLocation: McBufReadable + McBufWritable> McBufReadable
         } else {
             let mut contents = Vec::new();
             for _ in 0..size {
-                contents.push(D::read_from(buf)?);
+                contents.push(D::azalea_read(buf)?);
             }
             Ok(Self::Direct { contents })
         }
     }
 }
-impl<D: Registry, ResourceLocation: McBufReadable + McBufWritable> McBufWritable
+impl<D: Registry, ResourceLocation: AzaleaRead + AzaleaWrite> AzaleaWrite
     for HolderSet<D, ResourceLocation>
 {
-    fn write_into(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
+    fn azalea_write(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
         match self {
             Self::Direct { contents } => {
-                (contents.len() as i32 + 1).var_write_into(buf)?;
+                (contents.len() as i32 + 1).azalea_write_var(buf)?;
                 for item in contents {
-                    item.write_into(buf)?;
+                    item.azalea_write(buf)?;
                 }
             }
             Self::Named { key, .. } => {
-                0i32.var_write_into(buf)?;
-                key.write_into(buf)?;
+                0i32.azalea_write_var(buf)?;
+                key.azalea_write(buf)?;
             }
         }
         Ok(())
     }
 }
-impl<D: Registry + Debug, ResourceLocation: McBufReadable + McBufWritable + Debug> Debug
+impl<D: Registry + Debug, ResourceLocation: AzaleaRead + AzaleaWrite + Debug> Debug
     for HolderSet<D, ResourceLocation>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -600,12 +600,19 @@ enum Block {
     MelonStem => "minecraft:melon_stem",
     Vine => "minecraft:vine",
     GlowLichen => "minecraft:glow_lichen",
+    ResinClump => "minecraft:resin_clump",
     OakFenceGate => "minecraft:oak_fence_gate",
     BrickStairs => "minecraft:brick_stairs",
     StoneBrickStairs => "minecraft:stone_brick_stairs",
     MudBrickStairs => "minecraft:mud_brick_stairs",
     Mycelium => "minecraft:mycelium",
     LilyPad => "minecraft:lily_pad",
+    ResinBlock => "minecraft:resin_block",
+    ResinBricks => "minecraft:resin_bricks",
+    ResinBrickStairs => "minecraft:resin_brick_stairs",
+    ResinBrickSlab => "minecraft:resin_brick_slab",
+    ResinBrickWall => "minecraft:resin_brick_wall",
+    ChiseledResinBricks => "minecraft:chiseled_resin_bricks",
     NetherBricks => "minecraft:nether_bricks",
     NetherBrickFence => "minecraft:nether_brick_fence",
     NetherBrickStairs => "minecraft:nether_brick_stairs",
@@ -1351,6 +1358,10 @@ enum Block {
     PaleMossBlock => "minecraft:pale_moss_block",
     PaleMossCarpet => "minecraft:pale_moss_carpet",
     PaleHangingMoss => "minecraft:pale_hanging_moss",
+    OpenEyeblossom => "minecraft:open_eyeblossom",
+    ClosedEyeblossom => "minecraft:closed_eyeblossom",
+    PottedOpenEyeblossom => "minecraft:potted_open_eyeblossom",
+    PottedClosedEyeblossom => "minecraft:potted_closed_eyeblossom",
 }
 }
 
@@ -1677,7 +1688,6 @@ enum EntityKind {
     CommandBlockMinecart => "minecraft:command_block_minecart",
     Cow => "minecraft:cow",
     Creaking => "minecraft:creaking",
-    CreakingTransient => "minecraft:creaking_transient",
     Creeper => "minecraft:creeper",
     DarkOakBoat => "minecraft:dark_oak_boat",
     DarkOakChestBoat => "minecraft:dark_oak_chest_boat",
@@ -2155,6 +2165,8 @@ enum Item {
     RedWool => "minecraft:red_wool",
     BlackWool => "minecraft:black_wool",
     Dandelion => "minecraft:dandelion",
+    OpenEyeblossom => "minecraft:open_eyeblossom",
+    ClosedEyeblossom => "minecraft:closed_eyeblossom",
     Poppy => "minecraft:poppy",
     BlueOrchid => "minecraft:blue_orchid",
     Allium => "minecraft:allium",
@@ -2303,6 +2315,13 @@ enum Item {
     Melon => "minecraft:melon",
     Vine => "minecraft:vine",
     GlowLichen => "minecraft:glow_lichen",
+    ResinClump => "minecraft:resin_clump",
+    ResinBlock => "minecraft:resin_block",
+    ResinBricks => "minecraft:resin_bricks",
+    ResinBrickStairs => "minecraft:resin_brick_stairs",
+    ResinBrickSlab => "minecraft:resin_brick_slab",
+    ResinBrickWall => "minecraft:resin_brick_wall",
+    ChiseledResinBricks => "minecraft:chiseled_resin_bricks",
     BrickStairs => "minecraft:brick_stairs",
     StoneBrickStairs => "minecraft:stone_brick_stairs",
     MudBrickStairs => "minecraft:mud_brick_stairs",
@@ -3087,6 +3106,7 @@ enum Item {
     FireworkStar => "minecraft:firework_star",
     EnchantedBook => "minecraft:enchanted_book",
     NetherBrick => "minecraft:nether_brick",
+    ResinBrick => "minecraft:resin_brick",
     PrismarineShard => "minecraft:prismarine_shard",
     PrismarineCrystals => "minecraft:prismarine_crystals",
     Rabbit => "minecraft:rabbit",
@@ -3669,6 +3689,7 @@ enum ParticleKind {
     Flame => "minecraft:flame",
     Infested => "minecraft:infested",
     CherryLeaves => "minecraft:cherry_leaves",
+    PaleOakLeaves => "minecraft:pale_oak_leaves",
     SculkSoul => "minecraft:sculk_soul",
     SculkCharge => "minecraft:sculk_charge",
     SculkChargePop => "minecraft:sculk_charge_pop",
@@ -4316,6 +4337,7 @@ enum SoundEvent {
     EntityCreakingUnfreeze => "minecraft:entity.creaking.unfreeze",
     EntityCreakingSpawn => "minecraft:entity.creaking.spawn",
     EntityCreakingSway => "minecraft:entity.creaking.sway",
+    EntityCreakingTwitch => "minecraft:entity.creaking.twitch",
     BlockCreakingHeartBreak => "minecraft:block.creaking_heart.break",
     BlockCreakingHeartFall => "minecraft:block.creaking_heart.fall",
     BlockCreakingHeartHit => "minecraft:block.creaking_heart.hit",
@@ -4454,6 +4476,11 @@ enum SoundEvent {
     EntityEvokerPrepareWololo => "minecraft:entity.evoker.prepare_wololo",
     EntityExperienceBottleThrow => "minecraft:entity.experience_bottle.throw",
     EntityExperienceOrbPickup => "minecraft:entity.experience_orb.pickup",
+    BlockEyeblossomOpenLong => "minecraft:block.eyeblossom.open_long",
+    BlockEyeblossomOpen => "minecraft:block.eyeblossom.open",
+    BlockEyeblossomCloseLong => "minecraft:block.eyeblossom.close_long",
+    BlockEyeblossomClose => "minecraft:block.eyeblossom.close",
+    BlockEyeblossomIdle => "minecraft:block.eyeblossom.idle",
     BlockFenceGateClose => "minecraft:block.fence_gate.close",
     BlockFenceGateOpen => "minecraft:block.fence_gate.open",
     ItemFirechargeUse => "minecraft:item.firecharge.use",
@@ -5254,6 +5281,15 @@ enum SoundEvent {
     BlockSpawnerHit => "minecraft:block.spawner.hit",
     BlockSpawnerPlace => "minecraft:block.spawner.place",
     BlockSpawnerStep => "minecraft:block.spawner.step",
+    BlockResinBreak => "minecraft:block.resin.break",
+    BlockResinFall => "minecraft:block.resin.fall",
+    BlockResinPlace => "minecraft:block.resin.place",
+    BlockResinStep => "minecraft:block.resin.step",
+    BlockResinBricksBreak => "minecraft:block.resin_bricks.break",
+    BlockResinBricksFall => "minecraft:block.resin_bricks.fall",
+    BlockResinBricksHit => "minecraft:block.resin_bricks.hit",
+    BlockResinBricksPlace => "minecraft:block.resin_bricks.place",
+    BlockResinBricksStep => "minecraft:block.resin_bricks.step",
     BlockSporeBlossomBreak => "minecraft:block.spore_blossom.break",
     BlockSporeBlossomFall => "minecraft:block.spore_blossom.fall",
     BlockSporeBlossomHit => "minecraft:block.spore_blossom.hit",
@@ -6106,7 +6142,6 @@ enum BlockKind {
     CaveVinesPlant => "minecraft:cave_vines_plant",
     CeilingHangingSign => "minecraft:ceiling_hanging_sign",
     Chain => "minecraft:chain",
-    CherryLeaves => "minecraft:cherry_leaves",
     Chest => "minecraft:chest",
     ChiseledBookShelf => "minecraft:chiseled_book_shelf",
     ChorusFlower => "minecraft:chorus_flower",
@@ -6144,6 +6179,7 @@ enum BlockKind {
     EndPortal => "minecraft:end_portal",
     EndPortalFrame => "minecraft:end_portal_frame",
     EndRod => "minecraft:end_rod",
+    Eyeblossom => "minecraft:eyeblossom",
     Farm => "minecraft:farm",
     BonemealableFeaturePlacer => "minecraft:bonemealable_feature_placer",
     Fence => "minecraft:fence",
@@ -6195,6 +6231,7 @@ enum BlockKind {
     MossyCarpet => "minecraft:mossy_carpet",
     MovingPiston => "minecraft:moving_piston",
     Mud => "minecraft:mud",
+    Multiface => "minecraft:multiface",
     Mushroom => "minecraft:mushroom",
     Mycelium => "minecraft:mycelium",
     NetherPortal => "minecraft:nether_portal",
@@ -6205,6 +6242,7 @@ enum BlockKind {
     Nylium => "minecraft:nylium",
     Observer => "minecraft:observer",
     Piglinwallskull => "minecraft:piglinwallskull",
+    ParticleLeaves => "minecraft:particle_leaves",
     PinkPetals => "minecraft:pink_petals",
     PistonBase => "minecraft:piston_base",
     PistonHead => "minecraft:piston_head",

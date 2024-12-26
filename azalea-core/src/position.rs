@@ -3,50 +3,49 @@
 //! The most common ones are [`Vec3`] and [`BlockPos`], which are usually used
 //! for entity positions and block positions, respectively.
 
+use std::str::FromStr;
 use std::{
     fmt,
     hash::Hash,
     io::{Cursor, Write},
     ops::{Add, AddAssign, Mul, Rem, Sub},
-    str::FromStr,
 };
 
-use azalea_buf::{BufReadError, McBuf, McBufReadable, McBufWritable};
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
+use azalea_buf::{AzBuf, AzaleaRead, AzaleaWrite, BufReadError};
 
+use crate::math;
 use crate::resource_location::ResourceLocation;
 
 macro_rules! vec3_impl {
     ($name:ident, $type:ty) => {
         impl $name {
             #[inline]
-            pub fn new(x: $type, y: $type, z: $type) -> Self {
+            pub const fn new(x: $type, y: $type, z: $type) -> Self {
                 Self { x, y, z }
             }
 
             /// Get the distance of this vector to the origin by doing `x^2 + y^2 +
             /// z^2`.
             #[inline]
-            pub fn length_sqr(&self) -> $type {
+            pub fn length_squared(&self) -> $type {
                 self.x * self.x + self.y * self.y + self.z * self.z
             }
 
             /// Get the squared distance from this position to another position.
-            /// Equivalent to `(self - other).length_sqr()`.
+            /// Equivalent to `(self - other).length_squared()`.
             #[inline]
-            pub fn distance_to_sqr(&self, other: &Self) -> $type {
-                (self - other).length_sqr()
+            pub fn distance_squared_to(&self, other: &Self) -> $type {
+                (self - other).length_squared()
             }
 
             #[inline]
-            pub fn horizontal_distance_sqr(&self) -> $type {
+            pub fn horizontal_distance_squared(&self) -> $type {
                 self.x * self.x + self.z * self.z
             }
 
             #[inline]
-            pub fn horizontal_distance_to_sqr(&self, other: &Self) -> $type {
-                (self - other).horizontal_distance_sqr()
+            pub fn horizontal_distance_squared_to(&self, other: &Self) -> $type {
+                (self - other).horizontal_distance_squared()
             }
 
             /// Return a new instance of this position with the y coordinate
@@ -72,6 +71,7 @@ macro_rules! vec3_impl {
 
             /// Return a new instance of this position with the z coordinate subtracted
             /// by the given number.
+            #[inline]
             pub fn north(&self, z: $type) -> Self {
                 Self {
                     x: self.x,
@@ -81,6 +81,7 @@ macro_rules! vec3_impl {
             }
             /// Return a new instance of this position with the x coordinate increased
             /// by the given number.
+            #[inline]
             pub fn east(&self, x: $type) -> Self {
                 Self {
                     x: self.x + x,
@@ -90,6 +91,7 @@ macro_rules! vec3_impl {
             }
             /// Return a new instance of this position with the z coordinate increased
             /// by the given number.
+            #[inline]
             pub fn south(&self, z: $type) -> Self {
                 Self {
                     x: self.x,
@@ -99,6 +101,7 @@ macro_rules! vec3_impl {
             }
             /// Return a new instance of this position with the x coordinate subtracted
             /// by the given number.
+            #[inline]
             pub fn west(&self, x: $type) -> Self {
                 Self {
                     x: self.x - x,
@@ -110,6 +113,16 @@ macro_rules! vec3_impl {
             #[inline]
             pub fn dot(&self, other: Self) -> $type {
                 self.x * other.x + self.y * other.y + self.z * other.z
+            }
+
+            /// Replace the Y with 0.
+            #[inline]
+            pub fn xz(&self) -> Self {
+                Self {
+                    x: self.x,
+                    y: <$type>::default(),
+                    z: self.z,
+                }
             }
         }
 
@@ -213,9 +226,10 @@ macro_rules! vec3_impl {
 }
 
 /// Used to represent an exact position in the world where an entity could be.
+///
 /// For blocks, [`BlockPos`] is used instead.
-#[derive(Clone, Copy, Debug, Default, PartialEq, McBuf)]
-#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, AzBuf)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct Vec3 {
     pub x: f64,
     pub y: f64,
@@ -224,6 +238,8 @@ pub struct Vec3 {
 vec3_impl!(Vec3, f64);
 
 impl Vec3 {
+    pub const ZERO: Vec3 = Vec3::new(0.0, 0.0, 0.0);
+
     /// Get the distance of this vector to the origin by doing
     /// `sqrt(x^2 + y^2 + z^2)`.
     pub fn length(&self) -> f64 {
@@ -235,12 +251,29 @@ impl Vec3 {
     pub fn distance_to(&self, other: &Self) -> f64 {
         (self - other).length()
     }
+
+    pub fn x_rot(self, radians: f32) -> Vec3 {
+        let x_delta = math::cos(radians);
+        let y_delta = math::sin(radians);
+        let x = self.x;
+        let y = self.y * (x_delta as f64) + self.z * (y_delta as f64);
+        let z = self.z * (x_delta as f64) - self.y * (y_delta as f64);
+        Vec3 { x, y, z }
+    }
+    pub fn y_rot(self, radians: f32) -> Vec3 {
+        let x_delta = math::cos(radians);
+        let y_delta = math::sin(radians);
+        let x = self.x * (x_delta as f64) + self.z * (y_delta as f64);
+        let y = self.y;
+        let z = self.z * (x_delta as f64) - self.x * (y_delta as f64);
+        Vec3 { x, y, z }
+    }
 }
 
 /// The coordinates of a block in the world. For entities (if the coordinate
 /// with decimals), use [`Vec3`] instead.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct BlockPos {
     pub x: i32,
     pub y: i32,
@@ -271,6 +304,46 @@ impl BlockPos {
     /// Get the distance of this vector from the origin by doing `x + y + z`.
     pub fn length_manhattan(&self) -> u32 {
         (self.x.abs() + self.y.abs() + self.z.abs()) as u32
+    }
+
+    /// Make a new BlockPos with the lower coordinates for each axis.
+    ///
+    /// ```
+    /// # use azalea_core::position::BlockPos;
+    /// assert_eq!(
+    ///     BlockPos::min(
+    ///        &BlockPos::new(1, 20, 300),
+    ///        &BlockPos::new(50, 40, 30),
+    ///    ),
+    ///    BlockPos::new(1, 20, 30),
+    /// );
+    /// ```
+    pub fn min(&self, other: &Self) -> Self {
+        Self {
+            x: self.x.min(other.x),
+            y: self.y.min(other.y),
+            z: self.z.min(other.z),
+        }
+    }
+
+    /// Make a new BlockPos with the higher coordinates for each axis.
+    ///
+    /// ```
+    /// # use azalea_core::position::BlockPos;
+    /// assert_eq!(
+    ///    BlockPos::max(
+    ///       &BlockPos::new(1, 20, 300),
+    ///       &BlockPos::new(50, 40, 30),
+    ///   ),
+    ///   BlockPos::new(50, 40, 300),
+    /// );
+    /// ```
+    pub fn max(&self, other: &Self) -> Self {
+        Self {
+            x: self.x.max(other.x),
+            y: self.y.max(other.y),
+            z: self.z.max(other.z),
+        }
     }
 }
 
@@ -315,15 +388,15 @@ impl From<u64> for ChunkPos {
         }
     }
 }
-impl McBufReadable for ChunkPos {
-    fn read_from(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
-        let long = u64::read_from(buf)?;
+impl AzaleaRead for ChunkPos {
+    fn azalea_read(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
+        let long = u64::azalea_read(buf)?;
         Ok(ChunkPos::from(long))
     }
 }
-impl McBufWritable for ChunkPos {
-    fn write_into(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
-        u64::from(*self).write_into(buf)?;
+impl AzaleaWrite for ChunkPos {
+    fn azalea_write(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
+        u64::from(*self).azalea_write(buf)?;
         Ok(())
     }
 }
@@ -586,9 +659,9 @@ const PACKED_Z_MASK: u64 = (1 << PACKED_Z_LENGTH) - 1;
 const Z_OFFSET: u64 = PACKED_Y_LENGTH;
 const X_OFFSET: u64 = PACKED_Y_LENGTH + PACKED_Z_LENGTH;
 
-impl McBufReadable for BlockPos {
-    fn read_from(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
-        let val = i64::read_from(buf)?;
+impl AzaleaRead for BlockPos {
+    fn azalea_read(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
+        let val = i64::azalea_read(buf)?;
         let x = (val << (64 - X_OFFSET - PACKED_X_LENGTH) >> (64 - PACKED_X_LENGTH)) as i32;
         let y = (val << (64 - PACKED_Y_LENGTH) >> (64 - PACKED_Y_LENGTH)) as i32;
         let z = (val << (64 - Z_OFFSET - PACKED_Z_LENGTH) >> (64 - PACKED_Z_LENGTH)) as i32;
@@ -596,18 +669,18 @@ impl McBufReadable for BlockPos {
     }
 }
 
-impl McBufReadable for GlobalPos {
-    fn read_from(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
+impl AzaleaRead for GlobalPos {
+    fn azalea_read(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
         Ok(GlobalPos {
-            world: ResourceLocation::read_from(buf)?,
-            pos: BlockPos::read_from(buf)?,
+            world: ResourceLocation::azalea_read(buf)?,
+            pos: BlockPos::azalea_read(buf)?,
         })
     }
 }
 
-impl McBufReadable for ChunkSectionPos {
-    fn read_from(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
-        let long = i64::read_from(buf)?;
+impl AzaleaRead for ChunkSectionPos {
+    fn azalea_read(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
+        let long = i64::azalea_read(buf)?;
         Ok(ChunkSectionPos {
             x: (long >> 42) as i32,
             y: (long << 44 >> 44) as i32,
@@ -616,31 +689,31 @@ impl McBufReadable for ChunkSectionPos {
     }
 }
 
-impl McBufWritable for BlockPos {
-    fn write_into(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
+impl AzaleaWrite for BlockPos {
+    fn azalea_write(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
         let mut val: u64 = 0;
         val |= ((self.x as u64) & PACKED_X_MASK) << X_OFFSET;
         val |= (self.y as u64) & PACKED_Y_MASK;
         val |= ((self.z as u64) & PACKED_Z_MASK) << Z_OFFSET;
-        val.write_into(buf)
+        val.azalea_write(buf)
     }
 }
 
-impl McBufWritable for GlobalPos {
-    fn write_into(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
-        ResourceLocation::write_into(&self.world, buf)?;
-        BlockPos::write_into(&self.pos, buf)?;
+impl AzaleaWrite for GlobalPos {
+    fn azalea_write(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
+        ResourceLocation::azalea_write(&self.world, buf)?;
+        BlockPos::azalea_write(&self.pos, buf)?;
 
         Ok(())
     }
 }
 
-impl McBufWritable for ChunkSectionPos {
-    fn write_into(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
+impl AzaleaWrite for ChunkSectionPos {
+    fn azalea_write(&self, buf: &mut impl Write) -> Result<(), std::io::Error> {
         let long = (((self.x & 0x3FFFFF) as i64) << 42)
             | (self.y & 0xFFFFF) as i64
             | (((self.z & 0x3FFFFF) as i64) << 20);
-        long.write_into(buf)?;
+        long.azalea_write(buf)?;
         Ok(())
     }
 }
@@ -733,9 +806,9 @@ mod tests {
     #[test]
     fn test_read_blockpos_from() {
         let mut buf = Vec::new();
-        13743895338965u64.write_into(&mut buf).unwrap();
+        13743895338965u64.azalea_write(&mut buf).unwrap();
         let mut buf = Cursor::new(&buf[..]);
-        let block_pos = BlockPos::read_from(&mut buf).unwrap();
+        let block_pos = BlockPos::azalea_read(&mut buf).unwrap();
         assert_eq!(block_pos, BlockPos::new(49, -43, -3));
     }
 
@@ -751,9 +824,9 @@ mod tests {
     #[test]
     fn test_read_chunk_pos_from() {
         let mut buf = Vec::new();
-        ChunkPos::new(2, -1).write_into(&mut buf).unwrap();
+        ChunkPos::new(2, -1).azalea_write(&mut buf).unwrap();
         let mut buf = Cursor::new(&buf[..]);
-        let chunk_pos = ChunkPos::from(u64::read_from(&mut buf).unwrap());
+        let chunk_pos = ChunkPos::from(u64::azalea_read(&mut buf).unwrap());
         assert_eq!(chunk_pos, ChunkPos::new(2, -1));
     }
 }
